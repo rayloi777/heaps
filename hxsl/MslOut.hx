@@ -147,6 +147,9 @@ class MslOut {
 	var varAccess : Map<Int,String>;
 	var kind : FunctionKind;
 	var inputIndex : Int;
+	var paramBuffers : Array<{ v : TVar, index : Int, addrSpace : String }>;
+	var paramTextures : Array<{ decl : String, index : Int, varId : Null<Int> }>;
+	var paramSamplerCount : Int;
 
 	public function new() {
 		varNames = new Map();
@@ -254,7 +257,7 @@ class MslOut {
 
 	function addVar( v : TVar ) {
 		switch( v.type ) {
-		case TArray(t, size), TBuffer(t, size, Uniform):
+		case TArray(t, size), TBuffer(t, size, Uniform | Partial):
 			addVar({
 				id : v.id,
 				name : v.name,
@@ -262,12 +265,12 @@ class MslOut {
 				kind : v.kind,
 			});
 			addArraySize(size);
-		case TBuffer(t, size, Storage):
+		case TBuffer(t, size, Storage | StoragePartial):
 			add("device ");
 			addType(t);
 			add("* ");
 			addIdent(v);
-		case TBuffer(t, size, RW):
+		case TBuffer(t, size, RW | RWPartial):
 			add("device ");
 			addType(t);
 			add("* ");
@@ -613,6 +616,12 @@ class MslOut {
 				// vertex shader: force lod 0
 				add(", level(0)");
 			}
+			// Pass extra arguments (offset, etc.)
+			for( i in 2...args.length ) {
+				if( g == TextureLod && i == 2 ) continue;
+				add(", ");
+				addValue(args[i], tabs);
+			}
 			add(")");
 		case TCall({ e : TGlobal(Texel) }, args):
 			// Metal: tex.read(coord, lod)
@@ -758,7 +767,7 @@ class MslOut {
 				case TMat3:
 					decl("float3 _matarr( float3x3 m, int idx ) { return float3(m[0][idx],m[1][idx],m[2][idx]); }");
 				case TMat3x4:
-					decl("float4 _matarr( float3x4 m, int idx ) { return float4(m[0][idx],m[1][idx],m[2][idx],m[3][idx]); }");
+					decl("float3 _matarr( float3x4 m, int idx ) { return float3(m[0][idx],m[1][idx],m[2][idx]); }");
 				case TMat4:
 					decl("float4 _matarr( float4x4 m, int idx ) { return float4(m[0][idx],m[1][idx],m[2][idx],m[3][idx]); }");
 				default:
@@ -879,8 +888,13 @@ class MslOut {
 			if( Tools.hasQualifier(v, Flat) )
 				add("flat ");
 			addVar(v);
-			if( v.kind == Output && outIndex == 0 )
-				add(" [[position]]");
+			// For fragment shaders, use [[color(n)]] for render target outputs.
+			if( v.kind == Output ) {
+				if( isVertex && outIndex == 0 )
+					add(" [[position]]");
+				else if( !isVertex )
+					add(" [[color(" + outIndex + ")]]");
+			}
 			add(";\n");
 			varAccess.set(v.id, "_out.");
 			if( v.kind == Output )
@@ -902,6 +916,15 @@ class MslOut {
 		if( kind == Fragment ) {
 			add("\tbool __frontFacing [[front_facing]];\n");
 			GLOBALS.set(FrontFacing, "_in.__frontFacing");
+		}
+		if( kind == Fragment ) {
+			for( g in foundGlobals.keys() ) {
+				if( g == Barycentrics ) {
+					add("\tfloat3 __bary [[barycentric_coord]];\n");
+					GLOBALS.set(Barycentrics, "_in.__bary");
+					break;
+				}
+			}
 		}
 		for( v in s.vars )
 			if( v.kind == Input || (v.kind == Var && !isVertex) )
@@ -971,10 +994,10 @@ class MslOut {
 				case TArray(t, _) if( t.isTexture() ):
 					textures.push(v);
 					continue;
-				case TBuffer(_, _, Storage):
+				case TBuffer(_, _, Storage | StoragePartial):
 					buffers.push(v);
 					continue;
-				case TBuffer(_, _, RW):
+				case TBuffer(_, _, RW | RWPartial):
 					buffers.push(v);
 					continue;
 				case TBuffer(_, _, _):
@@ -1010,73 +1033,66 @@ class MslOut {
 			add("};\n\n");
 		}
 
-		// Declare device buffers (storage/RW)
-		var bufIndex = 0;
+		var bufIndex = 2;
+		paramBuffers = [];
 		for( b in buffers ) {
 			switch( b.type ) {
-			case TBuffer(t, size, Storage):
-				add("device ");
-				addType(t);
-				add("* ");
-				addIdent(b);
-				add(" [[buffer(" + (bufIndex++) + ")]];\n");
-			case TBuffer(t, size, RW):
-				add("device ");
-				addType(t);
-				add("* ");
-				addIdent(b);
-				add(" [[buffer(" + (bufIndex++) + ")]];\n");
-			case TBuffer(t, size, Uniform):
-				add("constant ");
-				addType(t);
-				add("* ");
-				addIdent(b);
-				add(" [[buffer(" + (bufIndex++) + ")]];\n");
+			case TBuffer(t, size, Storage | StoragePartial):
+				paramBuffers.push({ v : b, index : bufIndex++, addrSpace : "device " });
+			case TBuffer(t, size, RW | RWPartial):
+				paramBuffers.push({ v : b, index : bufIndex++, addrSpace : "device " });
+			case TBuffer(t, size, Uniform | Partial):
+				paramBuffers.push({ v : b, index : bufIndex++, addrSpace : "constant " });
 			default:
 			}
 		}
-		if( buffers.length > 0 ) add("\n");
 
-		// Declare textures and build sampler map
+		// Collect texture bindings and build sampler map
 		var texIndex = 0;
 		var ctx = new Samplers();
+		paramTextures = [];
 		for( v in textures ) {
 			switch( v.type ) {
 			case TArray(TRWTexture(dim, arr, chans), SConst(n)):
 				for( i in 0...n ) {
-					add(getTexType(TRWTexture(dim, arr, chans)));
-					add(" tex" + texIndex + " [[texture(" + texIndex + ")]];\n");
+					paramTextures.push({ decl : getTexType(TRWTexture(dim, arr, chans)) + " tex" + texIndex, index : texIndex, varId : null });
 					texIndex++;
 				}
 				samplers.set(v.id, ctx.make(v, []));
 			case TRWTexture(_, _, _):
+				var tmp = new StringBuf();
+				var oldBuf = buf;
+				buf = tmp;
 				add(getTexType(v.type));
 				add(" ");
 				addIdent(v);
-				add(" [[texture(" + texIndex + ")]];\n");
+				buf = oldBuf;
+				paramTextures.push({ decl : tmp.toString(), index : texIndex, varId : v.id });
 				texIndex++;
 				samplers.set(v.id, ctx.make(v, []));
 			case TArray(t, SConst(n)) if( t.isTexture() ):
 				for( i in 0...n ) {
-					add(getTexType(t));
-					add(" tex" + texIndex + " [[texture(" + texIndex + ")]];\n");
+					paramTextures.push({ decl : getTexType(t) + " tex" + texIndex, index : texIndex, varId : null });
 					texIndex++;
 				}
 				samplers.set(v.id, ctx.make(v, []));
 			default:
 				if( v.type.isTexture() ) {
+					var tmp = new StringBuf();
+					var oldBuf = buf;
+					buf = tmp;
 					add(getTexType(v.type));
 					add(" ");
 					addIdent(v);
-					add(" [[texture(" + texIndex + ")]];\n");
+					buf = oldBuf;
+					paramTextures.push({ decl : tmp.toString(), index : texIndex, varId : v.id });
 					texIndex++;
 					samplers.set(v.id, ctx.make(v, []));
 				}
 			}
 		}
 
-		if( ctx.count > 0 )
-			add("sampler __Samplers[" + ctx.count + "] [[sampler(0)]];\n");
+		paramSamplerCount = ctx.count;
 	}
 
 	function emitMain( expr : TExpr ) {
@@ -1102,6 +1118,31 @@ class MslOut {
 
 		// Params buffer
 		add("\t, constant Params& __params [[buffer(1)]]\n");
+
+		for( pb in paramBuffers ) {
+			add("\t, " + pb.addrSpace);
+			// Need to use a temp buf to get the var declaration
+			var tmp = new StringBuf();
+			var oldBuf = buf;
+			buf = tmp;
+			switch( pb.v.type ) {
+			case TBuffer(t, size, _):
+				addType(t);
+				add("* ");
+				addIdent(pb.v);
+			default:
+			}
+			buf = oldBuf;
+			add(tmp.toString());
+			add(" [[buffer(" + pb.index + ")]]\n");
+		}
+
+		for( pt in paramTextures ) {
+			add("\t, " + pt.decl + " [[texture(" + pt.index + ")]]\n");
+		}
+
+		if( paramSamplerCount > 0 )
+			add("\t, sampler __Samplers[" + paramSamplerCount + "] [[sampler(0)]]\n");
 
 		add(") {\n");
 
@@ -1138,7 +1179,7 @@ class MslOut {
 		for( v in localsArr ) {
 			var isConst = v.qualifiers != null && v.qualifiers.indexOf(Final) >= 0;
 			if( isConst ) {
-				add("constant ");
+				add("constexpr ");
 				addVar(v);
 				add(" = ");
 				// Find the initializer expression
@@ -1181,6 +1222,9 @@ class MslOut {
 		exprValues = [];
 		samplers = new Map();
 		varAccess = new Map();
+		paramBuffers = [];
+		paramTextures = [];
+		paramSamplerCount = 0;
 
 		if( s.funs.length != 1 ) throw "assert";
 		var f = s.funs[0];
