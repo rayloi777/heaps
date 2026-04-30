@@ -104,6 +104,8 @@ class Engine {
 		driver = new h3d.impl.DX12Driver();
 		#elseif hldx
 		driver = new h3d.impl.DirectXDriver();
+		#elseif hlmetal
+		driver = new h3d.impl.MetalDriver();
 		#elseif usesys
 		driver = new haxe.GraphicsDriver(antiAlias);
 		#else
