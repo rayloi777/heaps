@@ -144,6 +144,9 @@ class MslOut {
 	var isCompute : Bool;
 	var computeLayout = [1,1,1];
 	var hasBinormal : Bool;
+	var varAccess : Map<Int,String>;
+	var kind : FunctionKind;
+	var inputIndex : Int;
 
 	public function new() {
 		varNames = new Map();
@@ -450,6 +453,8 @@ class MslOut {
 			case CBool(b): add(b);
 			}
 		case TVar(v):
+			var acc = varAccess.get(v.id);
+			if( acc != null ) add(acc);
 			addIdent(v);
 		case TGlobal(g):
 			add(GLOBALS.get(g));
@@ -647,6 +652,8 @@ class MslOut {
 			add(")");
 		case TCall({ e : TGlobal(VertexAt) }, [{ e : TVar(v) }, index]):
 			add("GetAttributeAtVertex(");
+			var acc = varAccess.get(v.id);
+			if( acc != null ) add(acc);
 			addIdent(v);
 			add(", ");
 			addValue(index, tabs);
@@ -827,6 +834,407 @@ class MslOut {
 		varNames.set(v.id, n);
 		allNames.set(n, v.id);
 		return n;
+	}
+
+	function collectGlobals( m : Map<TGlobal,Type>, e : TExpr ) {
+		switch( e.e ) {
+		case TGlobal(g): m.set(g, e.t);
+		case TCall({ e : TGlobal(SetLayout) }, [{ e : TConst(CInt(x)) }, { e : TConst(CInt(y)) }, { e : TConst(CInt(z)) }]):
+			computeLayout = [x, y, z];
+		case TCall({ e : TGlobal(SetLayout) }, [{ e : TConst(CInt(x)) }, { e : TConst(CInt(y)) }]):
+			computeLayout = [x, y, 1];
+		case TCall({ e : TGlobal(SetLayout) }, [{ e : TConst(CInt(x)) }]):
+			computeLayout = [x, 1, 1];
+		default: e.iter(collectGlobals.bind(m));
+		}
+	}
+
+	function getSVName( g : TGlobal ) {
+		return switch( g ) {
+		case VertexID: "vertex_id";
+		case InstanceID: "instance_id";
+		case ComputeVar_GlobalInvocation: "thread_position_in_grid";
+		case ComputeVar_LocalInvocation: "thread_position_in_threadgroup";
+		case ComputeVar_WorkGroup: "threadgroup_position_in_grid";
+		case ComputeVar_LocalInvocationIndex: "thread_index_in_threadgroup";
+		default: null;
+		}
+	}
+
+	function initVars( s : ShaderData ) {
+		var outIndex = 0;
+		inputIndex = 0;
+
+		function declInputVar(v : TVar) {
+			add("\t");
+			if( Tools.hasQualifier(v, Flat) )
+				add("flat ");
+			addVar(v);
+			add(" [[attribute(" + (inputIndex++) + ")]];\n");
+			varAccess.set(v.id, "_in.");
+		}
+
+		function declOutputVar(v : TVar) {
+			add("\t");
+			if( Tools.hasQualifier(v, Flat) )
+				add("flat ");
+			addVar(v);
+			if( v.kind == Output && outIndex == 0 )
+				add(" [[position]]");
+			add(";\n");
+			varAccess.set(v.id, "_out.");
+			if( v.kind == Output )
+				outIndex++;
+		}
+
+		var foundGlobals = new Map();
+		for( f in s.funs )
+			collectGlobals(foundGlobals, f.expr);
+
+		// Build s_input struct
+		var oldAllNames = allNames;
+		allNames = new Map();
+		add("struct s_input {\n");
+		if( kind == Fragment ) {
+			add("\tfloat4 __pos [[position]];\n");
+			GLOBALS.set(FragCoord, "_in.__pos");
+		}
+		if( kind == Fragment ) {
+			add("\tbool __frontFacing [[front_facing]];\n");
+			GLOBALS.set(FrontFacing, "_in.__frontFacing");
+		}
+		for( v in s.vars )
+			if( v.kind == Input || (v.kind == Var && !isVertex) )
+				declInputVar(v);
+		for( g in foundGlobals.keys() ) {
+			var sv = getSVName(g);
+			if( sv == null ) continue;
+			add("\t");
+			switch( g ) {
+			case InstanceID, VertexID:
+				add("uint");
+			default:
+				addType(foundGlobals.get(g));
+			}
+			var name = g.getName().split("_").pop();
+			name = name.charAt(0).toLowerCase() + name.substr(1);
+			add(" " + name);
+			add(" [[" + sv + "]];\n");
+			GLOBALS.set(g, "_in." + name);
+		}
+		add("};\n\n");
+
+		// Build s_output struct (not for compute)
+		if( !isCompute ) {
+			allNames = new Map();
+			outIndex = 0;
+			add("struct s_output {\n");
+			for( v in s.vars )
+				if( v.kind == Output )
+					declOutputVar(v);
+			for( v in s.vars )
+				if( v.kind == Var && isVertex )
+					declOutputVar(v);
+			add("};\n\n");
+		}
+
+		allNames = oldAllNames;
+	}
+
+	function initGlobals( s : ShaderData ) {
+		var hasGlobals = false;
+		for( v in s.vars )
+			if( v.kind == Global ) { hasGlobals = true; break; }
+		if( !hasGlobals ) return;
+
+		add("struct Globals {\n");
+		for( v in s.vars )
+			if( v.kind == Global ) {
+				add("\t");
+				addVar(v);
+				add(";\n");
+			}
+		add("};\n\n");
+	}
+
+	function initParams( s : ShaderData ) {
+		var textures = [];
+		var buffers = [];
+		var hasParams = false;
+
+		for( v in s.vars )
+			if( v.kind == Param ) {
+				switch( v.type ) {
+				case TArray(TRWTexture(_), _):
+					textures.push(v);
+					continue;
+				case TArray(t, _) if( t.isTexture() ):
+					textures.push(v);
+					continue;
+				case TBuffer(_, _, Storage):
+					buffers.push(v);
+					continue;
+				case TBuffer(_, _, RW):
+					buffers.push(v);
+					continue;
+				case TBuffer(_, _, _):
+					buffers.push(v);
+					continue;
+				default:
+					if( v.type.isTexture() ) {
+						textures.push(v);
+						continue;
+					}
+				}
+				hasParams = true;
+			}
+
+		if( hasParams ) {
+			add("struct Params {\n");
+			for( v in s.vars )
+				if( v.kind == Param ) {
+					switch( v.type ) {
+					case TArray(TRWTexture(_), _):
+						continue;
+					case TArray(t, _) if( t.isTexture() ):
+						continue;
+					case TBuffer(_, _, _):
+						continue;
+					default:
+						if( v.type.isTexture() ) continue;
+					}
+					add("\t");
+					addVar(v);
+					add(";\n");
+				}
+			add("};\n\n");
+		}
+
+		// Declare device buffers (storage/RW)
+		var bufIndex = 0;
+		for( b in buffers ) {
+			switch( b.type ) {
+			case TBuffer(t, size, Storage):
+				add("device ");
+				addType(t);
+				add("* ");
+				addIdent(b);
+				add(" [[buffer(" + (bufIndex++) + ")]];\n");
+			case TBuffer(t, size, RW):
+				add("device ");
+				addType(t);
+				add("* ");
+				addIdent(b);
+				add(" [[buffer(" + (bufIndex++) + ")]];\n");
+			case TBuffer(t, size, Uniform):
+				add("constant ");
+				addType(t);
+				add("* ");
+				addIdent(b);
+				add(" [[buffer(" + (bufIndex++) + ")]];\n");
+			default:
+			}
+		}
+		if( buffers.length > 0 ) add("\n");
+
+		// Declare textures and build sampler map
+		var texIndex = 0;
+		var ctx = new Samplers();
+		for( v in textures ) {
+			switch( v.type ) {
+			case TArray(TRWTexture(dim, arr, chans), SConst(n)):
+				for( i in 0...n ) {
+					add(getTexType(TRWTexture(dim, arr, chans)));
+					add(" tex" + texIndex + " [[texture(" + texIndex + ")]];\n");
+					texIndex++;
+				}
+				samplers.set(v.id, ctx.make(v, []));
+			case TRWTexture(_, _, _):
+				add(getTexType(v.type));
+				add(" ");
+				addIdent(v);
+				add(" [[texture(" + texIndex + ")]];\n");
+				texIndex++;
+				samplers.set(v.id, ctx.make(v, []));
+			case TArray(t, SConst(n)) if( t.isTexture() ):
+				for( i in 0...n ) {
+					add(getTexType(t));
+					add(" tex" + texIndex + " [[texture(" + texIndex + ")]];\n");
+					texIndex++;
+				}
+				samplers.set(v.id, ctx.make(v, []));
+			default:
+				if( v.type.isTexture() ) {
+					add(getTexType(v.type));
+					add(" ");
+					addIdent(v);
+					add(" [[texture(" + texIndex + ")]];\n");
+					texIndex++;
+					samplers.set(v.id, ctx.make(v, []));
+				}
+			}
+		}
+
+		if( ctx.count > 0 )
+			add("sampler __Samplers[" + ctx.count + "] [[sampler(0)]];\n");
+	}
+
+	function emitMain( expr : TExpr ) {
+		if( isCompute )
+			add("kernel ");
+		else if( isVertex )
+			add("vertex ");
+		else
+			add("fragment ");
+
+		if( isCompute )
+			add("void ");
+		else
+			add("s_output ");
+
+		add("main(\n");
+
+		// Stage-in input
+		add("\ts_input _in [[stage_in]]\n");
+
+		// Globals buffer
+		add("\t, constant Globals& __globals [[buffer(0)]]\n");
+
+		// Params buffer
+		add("\t, constant Params& __params [[buffer(1)]]\n");
+
+		add(") {\n");
+
+		// Declare output struct for non-compute shaders
+		if( !isCompute )
+			add("\ts_output _out = {};\n");
+
+		// Emit body
+		switch( expr.e ) {
+		case TBlock(el):
+			for( e in el ) {
+				switch( e.e ) {
+				case TBinop(OpAssign, { e : TVar(v) }, _) if( v.qualifiers != null && v.qualifiers.indexOf(Final) >= 0 ):
+					// ignore (is a static const)
+					continue;
+				default:
+				}
+				add("\t");
+				addExpr(e, "\t");
+				newLine(e);
+			}
+		default:
+			addExpr(expr, "");
+		}
+
+		if( !isCompute )
+			add("\treturn _out;\n");
+		add("}\n");
+	}
+
+	function initLocals(s : ShaderData) {
+		var localsArr = Lambda.array(locals);
+		localsArr.sort(function(v1, v2) return Reflect.compare(v1.name, v2.name));
+		for( v in localsArr ) {
+			var isConst = v.qualifiers != null && v.qualifiers.indexOf(Final) >= 0;
+			if( isConst ) {
+				add("constant ");
+				addVar(v);
+				add(" = ");
+				// Find the initializer expression
+				var found = null;
+				for( f in s.funs ) {
+					switch( f.expr.e ) {
+					case TBlock(el):
+						for( e in el ) {
+							switch( e.e ) {
+							case TBinop(OpAssign, { e : TVar(v2) }, einit) if( v2 == v ):
+								found = einit;
+								break;
+							default:
+							}
+						}
+					default:
+					}
+				}
+				if( found == null )
+					throw "Constant variable " + v.name + " is missing initializer";
+				addExpr(found, "");
+			} else {
+				add("thread ");
+				addVar(v);
+			}
+			add(";\n");
+		}
+		add("\n");
+
+		for( e in exprValues ) {
+			add(e);
+			add("\n\n");
+		}
+	}
+
+	public function run( s : ShaderData ) {
+		locals = new Map();
+		decls = [];
+		buf = new StringBuf();
+		exprValues = [];
+		samplers = new Map();
+		varAccess = new Map();
+
+		if( s.funs.length != 1 ) throw "assert";
+		var f = s.funs[0];
+		kind = f.kind;
+		isVertex = kind == Vertex;
+		isCompute = kind == Main;
+		hasBinormal = false;
+
+		// Metal header
+		decl("#include <metal_stdlib>");
+		decl("using namespace metal;");
+
+		// Initialize variable name map first
+		for( v in s.vars )
+			varName(v, varNames, allNames);
+
+		initVars(s);
+		initGlobals(s);
+		initParams(s);
+
+		// Set up var access for Global kind variables
+		for( v in s.vars )
+			if( v.kind == Global && varAccess.get(v.id) == null )
+				varAccess.set(v.id, "__globals.");
+
+		// Set up var access for Param kind variables (non-texture, non-buffer)
+		for( v in s.vars )
+			if( v.kind == Param ) {
+				if( varAccess.get(v.id) != null ) continue;
+				switch( v.type ) {
+				case TSampler(_), TRWTexture(_), TBuffer(_, _, _):
+					// textures and buffers are accessed directly
+				default:
+					if( v.type.isTexture() ) continue;
+					varAccess.set(v.id, "__params.");
+				}
+			}
+
+		var tmp = buf;
+		buf = new StringBuf();
+		emitMain(f.expr);
+		exprValues.push(buf.toString());
+		buf = tmp;
+
+		initLocals(s);
+
+		decls.push(buf.toString());
+		buf = null;
+		return decls.join("\n");
+	}
+
+	public static function compile( s : ShaderData ) {
+		var out = new MslOut();
+		return out.run(s);
 	}
 
 }
