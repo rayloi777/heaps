@@ -24,6 +24,15 @@ typedef Query = h3d.impl.DX12Driver.QueryData;
 typedef GPUBuffer = dx.Resource;
 typedef Texture = { res : dx.Resource, view : dx.Driver.ShaderResourceView, ?depthView : dx.Driver.DepthStencilView, ?readOnlyDepthView : dx.Driver.DepthStencilView, rt : Array<dx.Driver.RenderTargetView>, ?views : Array<dx.Driver.ShaderResourceView> };
 typedef Query = {};
+#elseif hlmetal
+typedef GPUBuffer = metal.Driver.Buffer;
+typedef Texture = {
+    res : metal.Driver.Texture,
+    ?view : metal.Driver.Texture,
+    ?depthView : metal.Driver.Texture,
+    rt : Array<metal.Driver.Texture>
+};
+typedef Query = {};
 #elseif usesys
 typedef GPUBuffer = haxe.GraphicsDriver.GPUBuffer;
 typedef Texture = haxe.GraphicsDriver.Texture;
