@@ -4,5 +4,7 @@
 -cp /Users/rayloi/Documents/GitHub/hashlink-master/libs/metal
 -D hlmetal
 -D hl_metal
+-L format
+-D dce=full
 -main TestRunner
 -hl test.hl
