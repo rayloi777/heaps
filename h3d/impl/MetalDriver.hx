@@ -131,9 +131,9 @@ class MetalDriver extends h3d.impl.Driver {
 		this.frame = frame;
 		MtlDrv.beginFrame();
 		inRenderPass = false;
+		curTexture = null;
 		// Begin default render pass with clear
 		beginDefaultPass(0, 0, 0, 0, 1.0, 0);
-		setRenderTarget(null);
 	}
 
 	override function present() {
@@ -802,8 +802,16 @@ class MetalDriver extends h3d.impl.Driver {
 
 	override function setRenderTarget( tex : Null<h3d.mat.Texture>, layer = 0, mipLevel = 0, depthBinding : h3d.Engine.DepthBinding = ReadWrite ) {
 		if( tex == null ) {
-			curTexture = null;
-			// Set viewport to output size
+			if( curTexture != null ) {
+				// Switching from texture target back to backbuffer — end current pass
+				if( inRenderPass ) {
+					MtlDrv.endRenderPass();
+					inRenderPass = false;
+				}
+				curTexture = null;
+				// Begin new default render pass for backbuffer
+				beginDefaultPass(0, 0, 0, 0, 1.0, 0);
+			}
 			MtlDrv.setViewport(0, 0, outputWidth, outputHeight, 0, 1);
 			return;
 		}
