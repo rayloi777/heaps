@@ -14,6 +14,10 @@ import ShaderMathBasic;
 import ShaderMathBasic.ShaderMathAdvanced;
 import ShaderMathBasic.ShaderVecMatOps;
 import ShaderMathBasic.ShaderTypeConv;
+import ShaderMathBasic.ShaderTexSample;
+import ShaderMathBasic.ShaderTexelOps;
+import ShaderMathBasic.ShaderControlFlow;
+import ShaderMathBasic.ShaderBinUnOps;
 
 typedef TestResult = { passed : Bool, reason : String };
 
@@ -121,6 +125,36 @@ class TestRunner {
         );
     }
 
+    // ---- Test 5: TexSample ----
+    static function testTexSample() : TestResult {
+        return doTest([new ShaderTexSample()],
+            [".sample(", "level("],
+            ["Texture.Sample("]
+        );
+    }
+
+    // ---- Test 6: TexelOps ----
+    static function testTexelOps() : TestResult {
+        return doTest([new ShaderTexelOps()],
+            [".sample(", "level(", "tex0", "tex1"]
+        );
+    }
+
+    // ---- Test 7: ControlFlow ----
+    static function testControlFlow() : TestResult {
+        return doTest([new ShaderControlFlow()],
+            ["while(", "if(", "discard_fragment()"],
+            ["discard;"]
+        );
+    }
+
+    // ---- Test 8: BinUnOps ----
+    static function testBinUnOps() : TestResult {
+        return doTest([new ShaderBinUnOps()],
+            ["mod("]
+        );
+    }
+
     public static function main() {
         // Initialize Metal
         win = metal.Window.create("hlmetal test", 1, 1);
@@ -134,6 +168,10 @@ class TestRunner {
         runTest("MathAdvanced", testMathAdvanced);
         runTest("VecMatOps", testVecMatOps);
         runTest("TypeConv", testTypeConv);
+        runTest("TexSample", testTexSample);
+        runTest("TexelOps", testTexelOps);
+        runTest("ControlFlow", testControlFlow);
+        runTest("BinUnOps", testBinUnOps);
 
         // Report
         trace('Results: $passedTests/$totalTests passed');
