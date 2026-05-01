@@ -202,3 +202,131 @@ class ShaderBinUnOps extends hxsl.Shader {
         }
     };
 }
+
+// ---- Test 9: SwizzleOps ----
+class ShaderSwizzleOps extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        @param var value : Vec4;
+        var output : { position : Vec4, color : Vec4 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+        }
+
+        function fragment() {
+            var xy = value.xy;
+            var zw = value.zw;
+            var x = value.x;
+            var yyyy = value.yyyy;
+            var wzyx = value.wzyx;
+            output.color = vec4(xy, zw) + vec4(x, x, x, x) + yyyy + wzyx;
+        }
+    };
+}
+
+// ---- Test 10: VertIO ----
+// Exercises: vertexID, instanceID
+class ShaderVertIO extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        var output : { position : Vec4, color : Vec4, instanceId : Float };
+
+        function vertex() {
+            var vid = vertexID;
+            var iid = instanceID;
+            output.position = vec4(input.position, 1.0);
+            output.instanceId = float(iid) + float(vid) * 0.01;
+        }
+
+        function fragment() {
+            output.color = vec4(output.instanceId, 0.0, 0.0, 1.0);
+        }
+    };
+}
+
+// ---- Test 11: FragInput ----
+// Exercises: fragCoord, frontFacing
+class ShaderFragInput extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        var output : { position : Vec4, color : Vec4 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+        }
+
+        function fragment() {
+            var fc = fragCoord;
+            var ff = frontFacing;
+            output.color = vec4(fc.x, fc.y, ff ? 1.0 : 0.0, 1.0);
+        }
+    };
+}
+
+// ---- Test 12: BlendModes ----
+// Shader for testing with different pipeline blend states
+class ShaderBlendModes extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3, uv : Vec2 };
+        @param var alpha : Float;
+        var output : { position : Vec4, color : Vec4, uv : Vec2 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+            output.uv = input.uv;
+        }
+
+        function fragment() {
+            output.color = vec4(output.uv, 0.0, alpha);
+        }
+    };
+}
+
+// ---- Test 13: DepthState ----
+// Exercises: @global camera, @perObject model matrix, depth output
+class ShaderDepthState extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        @global var camera : {
+            var viewProj : Mat4;
+        };
+        @global var object : {
+            @perObject var modelView : Mat3x4;
+        };
+        var output : { position : Vec4, color : Vec4, depth : Float };
+
+        function vertex() {
+            var worldPos = input.position * object.modelView;
+            output.position = vec4(worldPos, 1.0) * camera.viewProj;
+            output.depth = output.position.z / output.position.w;
+        }
+
+        function fragment() {
+            output.color = vec4(output.depth, 0.0, 0.0, 1.0);
+        }
+    };
+}
+
+// ---- Test 14: PackOps ----
+// Exercises: pack, unpack, packNormal, unpackNormal
+class ShaderPackOps extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        @param var value : Float;
+        @param var normal : Vec3;
+        var output : { position : Vec4, color : Vec4 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+        }
+
+        function fragment() {
+            var packed = pack(value);
+            var unpacked = unpack(packed);
+            var packedN = packNormal(normal);
+            var unpackedN = unpackNormal(packedN);
+            output.color = vec4(unpacked, unpackedN.x, 0.0, 1.0);
+        }
+    };
+}
