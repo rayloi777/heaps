@@ -330,3 +330,170 @@ class ShaderPackOps extends hxsl.Shader {
         }
     };
 }
+
+// ---- Test 15: Derivatives ----
+// Exercises: dFdx, dFdy, fwidth
+class ShaderDerivatives extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3, uv : Vec2 };
+        var output : { position : Vec4, color : Vec4, uv : Vec2 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+            output.uv = input.uv;
+        }
+
+        function fragment() {
+            var dx = dFdx(output.uv.x);
+            var dy = dFdy(output.uv.y);
+            var fw = fwidth(output.uv.x);
+            output.color = vec4(dx, dy, fw, 1.0);
+        }
+    };
+}
+
+// ---- Test 16: VarQualifiers ----
+// Exercises: @param, @global, @perObject
+class ShaderVarQualifiers extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        @param var tint : Vec4;
+        @param var intensity : Float;
+        @global var camera : {
+            var viewProj : Mat4;
+            var position : Vec3;
+        };
+        @global var object : {
+            @perObject var globalModelView : Mat3x4;
+        };
+        var output : { position : Vec4, color : Vec4 };
+
+        function vertex() {
+            var worldPos = input.position * object.globalModelView;
+            output.position = vec4(worldPos, 1.0) * camera.viewProj;
+        }
+
+        function fragment() {
+            output.color = tint * intensity;
+        }
+    };
+}
+
+// ---- Test 17: MultiTex ----
+// Exercises: Multiple Sampler2D bindings
+class ShaderMultiTex extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3, uv : Vec2 };
+        @param var tex1 : Sampler2D;
+        @param var tex2 : Sampler2D;
+        @param var blend : Float;
+        var output : { position : Vec4, color : Vec4, uv : Vec2 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+            output.uv = input.uv;
+        }
+
+        function fragment() {
+            var c1 = tex1.get(output.uv);
+            var c2 = tex2.get(output.uv);
+            output.color = mix(c1, c2, blend);
+        }
+    };
+}
+
+// ---- Test 18: CondCompile ----
+// Exercises: @const conditional branching
+class ShaderCondCompile extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        @const var useRed : Bool;
+        @param var colorA : Vec4;
+        @param var colorB : Vec4;
+        var output : { position : Vec4, color : Vec4 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+        }
+
+        function fragment() {
+            if( useRed )
+                output.color = colorA;
+            else
+                output.color = colorB;
+        }
+    };
+}
+
+// ---- Test 19: ShaderChain ----
+// Two shaders that get linked together
+class ShaderChainVert extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3, uv : Vec2 };
+        @global var camera : {
+            var viewProj : Mat4;
+        };
+        @global var object : {
+            @perObject var globalModelView : Mat3x4;
+        };
+        var output : { position : Vec4, uv : Vec2 };
+
+        function vertex() {
+            var worldPos = input.position * object.globalModelView;
+            output.position = vec4(worldPos, 1.0) * camera.viewProj;
+            output.uv = input.uv;
+        }
+    };
+}
+
+class ShaderChainFrag extends hxsl.Shader {
+    static var SRC = {
+        @param var diffuseMap : Sampler2D;
+        @param var tint : Vec3;
+        var output : { color : Vec4, uv : Vec2 };
+
+        function fragment() {
+            var texColor = diffuseMap.get(output.uv);
+            output.color = vec4(texColor.rgb * tint, texColor.a);
+        }
+    };
+}
+
+// ---- Test 20: RealWorldSmoke ----
+// Complex shader mimicking BaseMesh + simple lighting
+class ShaderRealWorldSmoke extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3, normal : Vec3, uv : Vec2 };
+        @global var camera : {
+            var viewProj : Mat4;
+            var position : Vec3;
+            var right : Vec3;
+            var up : Vec3;
+            var target : Vec3;
+        };
+        @global var object : {
+            @perObject var globalModelView : Mat3x4;
+        };
+        @param var diffuseMap : Sampler2D;
+        @param var lightDir : Vec3;
+        @param var lightColor : Vec3;
+        @param var ambient : Float;
+        var output : { position : Vec4, color : Vec4, normal : Vec3, uv : Vec2, worldPos : Vec3 };
+
+        function vertex() {
+            var worldPos = input.position * object.globalModelView;
+            output.position = vec4(worldPos, 1.0) * camera.viewProj;
+            output.normal = input.normal * object.globalModelView;
+            output.uv = input.uv;
+            output.worldPos = worldPos;
+        }
+
+        function fragment() {
+            var n = normalize(output.normal);
+            var d = dot(n, normalize(lightDir));
+            var diffuse = lightColor * max(d, 0.0) + ambient;
+            var texColor = diffuseMap.get(output.uv);
+            output.color = vec4(texColor.rgb * diffuse, texColor.a);
+        }
+    };
+}

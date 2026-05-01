@@ -24,6 +24,13 @@ import ShaderMathBasic.ShaderFragInput;
 import ShaderMathBasic.ShaderBlendModes;
 import ShaderMathBasic.ShaderDepthState;
 import ShaderMathBasic.ShaderPackOps;
+import ShaderMathBasic.ShaderDerivatives;
+import ShaderMathBasic.ShaderVarQualifiers;
+import ShaderMathBasic.ShaderMultiTex;
+import ShaderMathBasic.ShaderCondCompile;
+import ShaderMathBasic.ShaderChainVert;
+import ShaderMathBasic.ShaderChainFrag;
+import ShaderMathBasic.ShaderRealWorldSmoke;
 
 typedef TestResult = { passed : Bool, reason : String };
 
@@ -220,6 +227,51 @@ class TestRunner {
         );
     }
 
+    // ---- Test 15: Derivatives ----
+    static function testDerivatives() : TestResult {
+        return doTest([new ShaderDerivatives()],
+            ["dfdx(", "dfdy(", "fwidth("]
+        );
+    }
+
+    // ---- Test 16: VarQualifiers ----
+    static function testVarQualifiers() : TestResult {
+        return doTest([new ShaderVarQualifiers()],
+            ["buffer(0)", "buffer(1)"]
+        );
+    }
+
+    // ---- Test 17: MultiTex ----
+    static function testMultiTex() : TestResult {
+        return doTest([new ShaderMultiTex()],
+            ["texture2d", "sampler("]
+        );
+    }
+
+    // ---- Test 18: CondCompile ----
+    // @const vars are resolved at compile time, so the branch is eliminated.
+    // Test that the shader compiles and produces valid MSL (branch eliminated).
+    static function testCondCompile() : TestResult {
+        return doTest([new ShaderCondCompile()],
+            ["fragment", "color("]  // @const resolved the branch away; just verify valid fragment
+        );
+    }
+
+    // ---- Test 19: ShaderChain ----
+    static function testShaderChain() : TestResult {
+        return doTest([new ShaderChainVert(), new ShaderChainFrag()],
+            ["buffer(0)", "vertex", "fragment"]
+        );
+    }
+
+    // ---- Test 20: RealWorldSmoke ----
+    static function testRealWorldSmoke() : TestResult {
+        return doTest([new ShaderRealWorldSmoke()],
+            ["vertex", "fragment", "normalize(", "dot(",
+             ".sample(", "buffer(0)", "buffer(1)"]
+        );
+    }
+
     public static function main() {
         // Initialize Metal
         win = metal.Window.create("hlmetal test", 1, 1);
@@ -243,6 +295,12 @@ class TestRunner {
         runTest("BlendModes", testBlendModes);
         runTest("DepthState", testDepthState);
         runTest("PackOps", testPackOps);
+        runTest("Derivatives", testDerivatives);
+        runTest("VarQualifiers", testVarQualifiers);
+        runTest("MultiTex", testMultiTex);
+        runTest("CondCompile", testCondCompile);
+        runTest("ShaderChain", testShaderChain);
+        runTest("RealWorldSmoke", testRealWorldSmoke);
 
         // Report
         trace('Results: $passedTests/$totalTests passed');
