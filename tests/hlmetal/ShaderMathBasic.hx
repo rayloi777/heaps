@@ -459,6 +459,71 @@ class ShaderChainFrag extends hxsl.Shader {
     };
 }
 
+// ---- Test 23: IntVec ----
+// Exercises: IVec2, IVec3, IVec4 constructors
+class ShaderIntVec extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        @param var value : Float;
+        var output : { position : Vec4, color : Vec4 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+        }
+
+        function fragment() {
+            var i = int(value);
+            var iv2 = ivec2(i, i + 1);
+            var iv3 = ivec3(i, i + 1, i + 2);
+            var iv4 = ivec4(iv2, iv2);
+            output.color = vec4(float(iv2.x) + float(iv3.y), float(iv4.z), float(iv4.w), 1.0);
+        }
+    };
+}
+
+// ---- Test 22: TextureSize ----
+// Exercises: TextureSize builtin
+class ShaderTextureSize extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3, uv : Vec2 };
+        @param var diffuseMap : Sampler2D;
+        var output : { position : Vec4, color : Vec4, uv : Vec2 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+            output.uv = input.uv;
+        }
+
+        function fragment() {
+            var size = textureSize(diffuseMap);
+            var c = diffuseMap.get(output.uv);
+            output.color = c + vec4(size.x / 1024.0, size.y / 1024.0, 0.0, 0.0);
+        }
+    };
+}
+
+// ---- Test 21: ForLoop ----
+// Exercises: TFor with OpInterval — verifies MslOut emits type declaration
+class ShaderForLoop extends hxsl.Shader {
+    static var SRC = {
+        @input var input : { position : Vec3 };
+        @param var time : Float;
+        var output : { position : Vec4, color : Vec4 };
+
+        function vertex() {
+            output.position = vec4(input.position, 1.0);
+        }
+
+        function fragment() {
+            var sum = 0.0;
+            for( i in 0...4 ) {
+                sum += float(i) + time;
+            }
+            output.color = vec4(sum * 0.25, 0.0, 0.0, 1.0);
+        }
+    };
+}
+
 // ---- Test 20: RealWorldSmoke ----
 // Complex shader mimicking BaseMesh + simple lighting
 class ShaderRealWorldSmoke extends hxsl.Shader {

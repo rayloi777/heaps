@@ -1,5 +1,6 @@
 package hxsl;
 using hxsl.Ast;
+import hxsl.HlslOut.Samplers;
 
 class MslOut {
 
@@ -63,7 +64,7 @@ class MslOut {
 		m.set(Mat2, "float2x2");
 		m.set(Mat3, "float3x3");
 		m.set(Mat4, "float4x4");
-		m.set(Mat3x4, "float3x4");
+		m.set(Mat3x4, "mat3x4");
 		// Functions with different names in Metal
 		m.set(LReflect, "reflect");
 		m.set(Fract, "fract"); // Metal uses fract (same as GLSL), not frac (HLSL)
@@ -146,10 +147,14 @@ class MslOut {
 	var hasBinormal : Bool;
 	var varAccess : Map<Int,String>;
 	var kind : FunctionKind;
+	var stagePrefix : String;
+	var hasGlobals : Bool;
+	var hasParams : Bool;
 	var inputIndex : Int;
 	var paramBuffers : Array<{ v : TVar, index : Int, addrSpace : String }>;
 	var paramTextures : Array<{ decl : String, index : Int, varId : Null<Int> }>;
 	var paramSamplerCount : Int;
+	var vertexParamGlobals : Array<{ g : TGlobal, name : String }>;
 
 	public function new() {
 		varNames = new Map();
@@ -176,9 +181,9 @@ class MslOut {
 	function getTexType( t : Type ) {
 		return switch( t ) {
 		case TSampler(dim, arr):
-			"texture" + dim.getName().substr(1) + (arr ? "Array" : "") + "<float, access::sample>";
+			"texture" + dim.getName().substr(1).toLowerCase() + (arr ? "_array" : "") + "<float, access::sample>";
 		case TRWTexture(dim, arr, chans):
-			"texture" + dim.getName().substr(1) + (arr ? "Array" : "") + "<float, access::write>";
+			"texture" + dim.getName().substr(1).toLowerCase() + (arr ? "_array" : "") + "<float, access::write>";
 		default:
 			throw "assert";
 		}
@@ -212,7 +217,7 @@ class MslOut {
 		case TMat4:
 			add("float4x4");
 		case TMat3x4:
-			add("float3x4");
+			add("float4x3");
 		case TSampler(_), TRWTexture(_):
 			add(getTexType(t));
 		case TStruct(vl):
@@ -296,19 +301,19 @@ class MslOut {
 	function declGlobal( g : TGlobal, args : Array<TExpr> ) {
 		switch( g ) {
 		case Mat3x4:
-			decl("float3x4 mat3x4( float4 a, float4 b, float4 c ) { return float3x4(a.xyz, b.xyz, c.xyz); }");
-			decl("float3x4 mat3x4( float4x4 m ) { return float3x4(m[0].xyz, m[1].xyz, m[2].xyz); }");
+			decl("float4x3 mat3x4( float4 a, float4 b, float4 c ) { return float4x3(float3(a.x, b.x, c.x), float3(a.y, b.y, c.y), float3(a.z, b.z, c.z), float3(a.w, b.w, c.w)); }");
+			decl("float4x3 mat3x4( float4x4 m ) { return float4x3(float3(m[0].x, m[1].x, m[2].x), float3(m[0].y, m[1].y, m[2].y), float3(m[0].z, m[1].z, m[2].z), float3(m[0].w, m[1].w, m[2].w)); }");
 		case Mat4:
 			decl("float4x4 mat4( float4 a, float4 b, float4 c, float4 d ) { return float4x4(a,b,c,d); }");
 		case Mat3:
 			decl("float3x3 mat3( float4x4 m ) { return float3x3(m[0].xyz, m[1].xyz, m[2].xyz); }");
-			decl("float3x3 mat3( float3x4 m ) { return float3x3(m[0].xyz, m[1].xyz, m[2].xyz); }");
+			decl("float3x3 mat3( float4x3 m ) { return float3x3(float3(m[0].x,m[1].x,m[2].x), float3(m[0].y,m[1].y,m[2].y), float3(m[0].z,m[1].z,m[2].z)); }");
 			decl("float3x3 mat3( float3 a, float3 b, float3 c ) { return float3x3(a,b,c); }");
 			decl("float3x3 mat3( float c00, float c01, float c02, float c10, float c11, float c12, float c20, float c21, float c22 ) { return float3x3(c00,c10,c20,c01,c11,c21,c02,c12,c22); }");
 		case Mat2:
 			decl("float2x2 mat2( float4x4 m ) { return float2x2(m[0].xy, m[1].xy); }");
 			decl("float2x2 mat2( float3x3 m ) { return float2x2(m[0].xy, m[1].xy); }");
-			decl("float2x2 mat2( float3x4 m ) { return float2x2(m[0].xy, m[1].xy); }");
+			decl("float2x2 mat2( float4x3 m ) { return float2x2(float2(m[0].x,m[1].x), float2(m[0].y,m[1].y)); }");
 			decl("float2x2 mat2( float2 a, float2 b ) { return float2x2(a,b); }");
 			decl("float2x2 mat2( float c00, float c01, float c10, float c11 ) { return float2x2(c00,c10,c01,c11); }");
 		case Mod:
@@ -572,30 +577,32 @@ class MslOut {
 		case TVarDecl(v, init):
 			locals.set(v.id, v);
 			if( init != null ) {
-				addIdent(v);
+				addVar(v);
 				add(" = ");
 				addValue(init, tabs);
 			} else {
-				add("/*var*/");
+				addVar(v);
 			}
 		case TCall({ e : TGlobal(SetLayout) }, _):
 			// ignore
 		case TCall({ e : TGlobal(g = (Texture | TextureLod)) }, args):
 			// Metal: tex.sample(sampler, uv) or tex.sample(sampler, uv, level(lod))
-			addValue(args[0], tabs);
-			add(".sample(");
-			// sampler argument
+			// Determine texture parameter and sampler
 			var offset = 0;
 			var dynOffset = null;
-			var expr = switch( args[0].e ) {
+			var texName = switch( args[0].e ) {
 			case TArray(e, { e : TConst(CInt(i)) }): offset = i; e;
 			case TArray(e, idx): dynOffset = idx; e;
 			default: args[0];
 			}
-			switch( expr.e ) {
+
+			switch( texName.e ) {
 			case TVar(v):
 				var sams = samplers.get(v.id);
 				if( sams == null ) throw "assert: no sampler for " + v.name;
+				// Use texture parameter name (tex0, tex1, etc.) directly
+				add("tex" + sams[offset]);
+				add(".sample(");
 				if( dynOffset != null ) {
 					add("__Samplers[");
 					add(sams[0]);
@@ -604,7 +611,10 @@ class MslOut {
 					add("]");
 				} else
 					add("__Samplers[" + sams[offset] + "]");
-			default: throw "assert";
+			default:
+				addValue(args[0], tabs);
+				add(".sample(");
+				add("__Samplers[0]");
 			}
 			add(", ");
 			addValue(args[1], tabs);
@@ -667,6 +677,26 @@ class MslOut {
 			add(", ");
 			addValue(index, tabs);
 			add(")");
+		case TCall({ e : TGlobal(TextureSize) }, args):
+			// Need to resolve texture variable from flattened expression
+			declGlobal(TextureSize, args);
+			var offset = 0;
+			var texName = switch( args[0].e ) {
+			case TArray(e, { e : TConst(CInt(i)) }): offset = i; e;
+			default: args[0];
+			}
+			add("textureSize(");
+			switch( texName.e ) {
+			case TVar(v):
+				var sams = samplers.get(v.id);
+				if( sams != null )
+					add("tex" + sams[offset]);
+				else
+					addIdent(v);
+			default:
+				addValue(args[0], tabs);
+			}
+			add(")");
 		case TCall(e2 = { e : TGlobal(g) }, args):
 			declGlobal(g, args);
 			switch( [g, args] ) {
@@ -694,15 +724,25 @@ class MslOut {
 			}
 			add(")");
 		case TSwiz(e2, regs):
-			addValue(e2, tabs);
-			add(".");
-			for( r in regs )
-				add(switch(r) {
-				case X: "x";
-				case Y: "y";
-				case Z: "z";
-				case W: "w";
-				});
+			switch( e2.t ) {
+			case TFloat, TInt, TBool:
+				// HLSL scalar swizzle - Metal doesn't support this
+				// Use constructor: scalar.xxxx -> float4(scalar)
+				addType(e.t);
+				add("(");
+				addValue(e2, tabs);
+				add(")");
+			default:
+				addValue(e2, tabs);
+				add(".");
+				for( r in regs )
+					add(switch(r) {
+					case X: "x";
+					case Y: "y";
+					case Z: "z";
+					case W: "w";
+					});
+			}
 		case TIf(econd, eif, eelse):
 			add("if( ");
 			addValue(econd, tabs);
@@ -729,7 +769,7 @@ class MslOut {
 			locals.set(v.id, v);
 			switch( it.e ) {
 			case TBinop(OpInterval, e1, e2):
-				add("for(");
+				add("for(int ");
 				add(v.name + "=");
 				addValue(e1, tabs);
 				add(";" + v.name + "<");
@@ -767,7 +807,7 @@ class MslOut {
 				case TMat3:
 					decl("float3 _matarr( float3x3 m, int idx ) { return float3(m[0][idx],m[1][idx],m[2][idx]); }");
 				case TMat3x4:
-					decl("float3 _matarr( float3x4 m, int idx ) { return float3(m[0][idx],m[1][idx],m[2][idx]); }");
+					decl("float4 _matarr( float4x3 m, int idx ) { return float4(m[0][idx],m[1][idx],m[2][idx],m[3][idx]); }");
 				case TMat4:
 					decl("float4 _matarr( float4x4 m, int idx ) { return float4(m[0][idx],m[1][idx],m[2][idx],m[3][idx]); }");
 				default:
@@ -786,9 +826,19 @@ class MslOut {
 		case TMeta(_, _, e2):
 			addExpr(e2, tabs);
 		case TField(e2, f):
-			addValue(e2, tabs);
-			add(".");
-			add(f);
+			switch( e2.t ) {
+			case TFloat, TInt, TBool:
+				// HLSL scalar swizzle (e.g. scalar.xxxx) - Metal doesn't support this
+				// Use constructor instead: scalar.xxxx -> float4(scalar)
+				addType(e.t);
+				add("(");
+				addValue(e2, tabs);
+				add(")");
+			default:
+				addValue(e2, tabs);
+				add(".");
+				add(f);
+			}
 		case TSyntax("code" | "msl", code, args):
 			var pos = 0;
 			var argRegex = ~/{(\d+)}/g;
@@ -872,6 +922,7 @@ class MslOut {
 
 	function initVars( s : ShaderData ) {
 		var outIndex = 0;
+		var varyingIndex = 0;
 		inputIndex = 0;
 
 		function declInputVar(v : TVar) {
@@ -879,7 +930,11 @@ class MslOut {
 			if( Tools.hasQualifier(v, Flat) )
 				add("flat ");
 			addVar(v);
-			add(" [[attribute(" + (inputIndex++) + ")]];\n");
+			// Fragment shader varyings use [[user(locN)]], vertex inputs use [[attribute(N)]]
+			if( !isVertex && v.kind == Var )
+				add(" [[user(loc" + (inputIndex++) + ")]];\n");
+			else
+				add(" [[attribute(" + (inputIndex++) + ")]];\n");
 			varAccess.set(v.id, "_in.");
 		}
 
@@ -894,21 +949,26 @@ class MslOut {
 					add(" [[position]]");
 				else if( !isVertex )
 					add(" [[color(" + outIndex + ")]]");
+			} else if( v.kind == Var && isVertex ) {
+				// Vertex shader varyings use [[user(locN)]] to match fragment input
+				add(" [[user(loc" + varyingIndex + ")]]");
 			}
 			add(";\n");
 			varAccess.set(v.id, "_out.");
 			if( v.kind == Output )
 				outIndex++;
+			else if( v.kind == Var && isVertex )
+				varyingIndex++;
 		}
 
 		var foundGlobals = new Map();
 		for( f in s.funs )
 			collectGlobals(foundGlobals, f.expr);
 
-		// Build s_input struct
+		// Build stage input struct
 		var oldAllNames = allNames;
 		allNames = new Map();
-		add("struct s_input {\n");
+		add("struct " + stagePrefix + "input {\n");
 		if( kind == Fragment ) {
 			add("\tfloat4 __pos [[position]];\n");
 			GLOBALS.set(FragCoord, "_in.__pos");
@@ -932,18 +992,24 @@ class MslOut {
 		for( g in foundGlobals.keys() ) {
 			var sv = getSVName(g);
 			if( sv == null ) continue;
-			add("\t");
 			switch( g ) {
 			case InstanceID, VertexID:
-				add("uint");
+				// Metal requires vertex_id/instance_id as function parameters,
+				// not struct members with [[stage_in]]
+				var name = g.getName();
+				name = name.charAt(0).toLowerCase() + name.substr(1);
+				if( vertexParamGlobals == null ) vertexParamGlobals = [];
+				vertexParamGlobals.push({ g : g, name : name });
+				GLOBALS.set(g, name);
 			default:
+				add("\t");
 				addType(foundGlobals.get(g));
+				var name = g.getName().split("_").pop();
+				name = name.charAt(0).toLowerCase() + name.substr(1);
+				add(" " + name);
+				add(" [[" + sv + "]];\n");
+				GLOBALS.set(g, "_in." + name);
 			}
-			var name = g.getName().split("_").pop();
-			name = name.charAt(0).toLowerCase() + name.substr(1);
-			add(" " + name);
-			add(" [[" + sv + "]];\n");
-			GLOBALS.set(g, "_in." + name);
 		}
 		add("};\n\n");
 
@@ -951,7 +1017,7 @@ class MslOut {
 		if( !isCompute ) {
 			allNames = new Map();
 			outIndex = 0;
-			add("struct s_output {\n");
+			add("struct " + stagePrefix + "output {\n");
 			for( v in s.vars )
 				if( v.kind == Output )
 					declOutputVar(v);
@@ -965,12 +1031,12 @@ class MslOut {
 	}
 
 	function initGlobals( s : ShaderData ) {
-		var hasGlobals = false;
+		hasGlobals = false;
 		for( v in s.vars )
 			if( v.kind == Global ) { hasGlobals = true; break; }
 		if( !hasGlobals ) return;
 
-		add("struct Globals {\n");
+		add("struct " + stagePrefix + "Globals {\n");
 		for( v in s.vars )
 			if( v.kind == Global ) {
 				add("\t");
@@ -983,7 +1049,7 @@ class MslOut {
 	function initParams( s : ShaderData ) {
 		var textures = [];
 		var buffers = [];
-		var hasParams = false;
+		hasParams = false;
 
 		for( v in s.vars )
 			if( v.kind == Param ) {
@@ -1013,7 +1079,7 @@ class MslOut {
 			}
 
 		if( hasParams ) {
-			add("struct Params {\n");
+			add("struct " + stagePrefix + "Params {\n");
 			for( v in s.vars )
 				if( v.kind == Param ) {
 					switch( v.type ) {
@@ -1106,18 +1172,27 @@ class MslOut {
 		if( isCompute )
 			add("void ");
 		else
-			add("s_output ");
+			add(stagePrefix + "output ");
 
 		add("main(\n");
 
 		// Stage-in input
-		add("\ts_input _in [[stage_in]]\n");
+		add("\t" + stagePrefix + "input _in [[stage_in]]\n");
+
+		// Vertex/instance ID as function parameters (Metal requirement)
+		if( vertexParamGlobals != null ) {
+			for( vg in vertexParamGlobals ) {
+				add("\t, uint ");
+				add(vg.name);
+				add(" [[" + getSVName(vg.g) + "]]\n");
+			}
+		}
 
 		// Globals buffer
-		add("\t, constant Globals& __globals [[buffer(0)]]\n");
+		if( hasGlobals ) add("\t, constant " + stagePrefix + "Globals& __globals [[buffer(0)]]\n");
 
 		// Params buffer
-		add("\t, constant Params& __params [[buffer(1)]]\n");
+		if( hasParams ) add("\t, constant " + stagePrefix + "Params& __params [[buffer(1)]]\n");
 
 		for( pb in paramBuffers ) {
 			add("\t, " + pb.addrSpace);
@@ -1142,15 +1217,16 @@ class MslOut {
 		}
 
 		if( paramSamplerCount > 0 )
-			add("\t, sampler __Samplers[" + paramSamplerCount + "] [[sampler(0)]]\n");
+			add("\t, array<sampler," + paramSamplerCount + "> __Samplers [[sampler(0)]]\n");
 
 		add(") {\n");
 
 		// Declare output struct for non-compute shaders
 		if( !isCompute )
-			add("\ts_output _out = {};\n");
+			add("\t" + stagePrefix + "output _out = {};\n");
 
 		// Emit body
+		var declaredLocals = new Map();
 		switch( expr.e ) {
 		case TBlock(el):
 			for( e in el ) {
@@ -1158,11 +1234,18 @@ class MslOut {
 				case TBinop(OpAssign, { e : TVar(v) }, _) if( v.qualifiers != null && v.qualifiers.indexOf(Final) >= 0 ):
 					// ignore (is a static const)
 					continue;
+				case TBinop(OpAssign, { e : TVar(v) }, einit) if( !declaredLocals.exists(v.id) && v.kind == Local ):
+					declaredLocals.set(v.id, true);
+					add("\t");
+					addVar(v);
+					add(" = ");
+					addValue(einit, "\t");
+					newLine(e);
 				default:
+					add("\t");
+					addExpr(e, "\t");
+					newLine(e);
 				}
-				add("\t");
-				addExpr(e, "\t");
-				newLine(e);
 			}
 		default:
 			addExpr(expr, "");
@@ -1174,41 +1257,8 @@ class MslOut {
 	}
 
 	function initLocals(s : ShaderData) {
-		var localsArr = Lambda.array(locals);
-		localsArr.sort(function(v1, v2) return Reflect.compare(v1.name, v2.name));
-		for( v in localsArr ) {
-			var isConst = v.qualifiers != null && v.qualifiers.indexOf(Final) >= 0;
-			if( isConst ) {
-				add("constexpr ");
-				addVar(v);
-				add(" = ");
-				// Find the initializer expression
-				var found = null;
-				for( f in s.funs ) {
-					switch( f.expr.e ) {
-					case TBlock(el):
-						for( e in el ) {
-							switch( e.e ) {
-							case TBinop(OpAssign, { e : TVar(v2) }, einit) if( v2 == v ):
-								found = einit;
-								break;
-							default:
-							}
-						}
-					default:
-					}
-				}
-				if( found == null )
-					throw "Constant variable " + v.name + " is missing initializer";
-				addExpr(found, "");
-			} else {
-				add("thread ");
-				addVar(v);
-			}
-			add(";\n");
-		}
-		add("\n");
-
+		// Locals are now declared inline in TVarDecl, so no forward declarations needed.
+		// Just append the main function bodies.
 		for( e in exprValues ) {
 			add(e);
 			add("\n\n");
@@ -1225,17 +1275,17 @@ class MslOut {
 		paramBuffers = [];
 		paramTextures = [];
 		paramSamplerCount = 0;
+		vertexParamGlobals = null;
 
 		if( s.funs.length != 1 ) throw "assert";
 		var f = s.funs[0];
 		kind = f.kind;
 		isVertex = kind == Vertex;
 		isCompute = kind == Main;
+		stagePrefix = switch( kind ) { case Vertex: "vs_"; case Fragment: "fs_"; case Main: "cs_"; default: "x_"; };
 		hasBinormal = false;
 
-		// Metal header
-		decl("#include <metal_stdlib>");
-		decl("using namespace metal;");
+		// Metal header is added by MetalDriver when combining shaders
 
 		// Initialize variable name map first
 		for( v in s.vars )

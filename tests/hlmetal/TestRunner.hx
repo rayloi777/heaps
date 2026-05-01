@@ -31,6 +31,9 @@ import ShaderMathBasic.ShaderCondCompile;
 import ShaderMathBasic.ShaderChainVert;
 import ShaderMathBasic.ShaderChainFrag;
 import ShaderMathBasic.ShaderRealWorldSmoke;
+import ShaderMathBasic.ShaderForLoop;
+import ShaderMathBasic.ShaderTextureSize;
+import ShaderMathBasic.ShaderIntVec;
 
 typedef TestResult = { passed : Bool, reason : String };
 
@@ -192,9 +195,9 @@ class TestRunner {
     }
 
     // ---- Test 10: VertIO ----
-    // Note: MslOut bug puts vertex_id/instance_id in struct (not params), so skip GPU compile
+    // VertexID/InstanceID are now emitted as function parameters (Metal requirement)
     static function testVertIO() : TestResult {
-        return doTestMslOnly([new ShaderVertIO()],
+        return doTest([new ShaderVertIO()],
             ["vertex_id", "instance_id"]
         );
     }
@@ -272,6 +275,27 @@ class TestRunner {
         );
     }
 
+    // ---- Test 21: ForLoop ----
+    static function testForLoop() : TestResult {
+        return doTest([new ShaderForLoop()],
+            ["for(int "]
+        );
+    }
+
+    // ---- Test 22: TextureSize ----
+    static function testTextureSize() : TestResult {
+        return doTest([new ShaderTextureSize()],
+            ["textureSize", "get_width"]
+        );
+    }
+
+    // ---- Test 23: IntVec ----
+    static function testIntVec() : TestResult {
+        return doTest([new ShaderIntVec()],
+            ["int2(", "int3(", "int4("]
+        );
+    }
+
     public static function main() {
         // Initialize Metal
         win = metal.Window.create("hlmetal test", 1, 1);
@@ -301,6 +325,9 @@ class TestRunner {
         runTest("CondCompile", testCondCompile);
         runTest("ShaderChain", testShaderChain);
         runTest("RealWorldSmoke", testRealWorldSmoke);
+        runTest("ForLoop", testForLoop);
+        runTest("TextureSize", testTextureSize);
+        runTest("IntVec", testIntVec);
 
         // Report
         trace('Results: $passedTests/$totalTests passed');
@@ -322,10 +349,10 @@ class TestRunner {
         var result = testFn();
         if( result.passed ) {
             passedTests++;
-            trace('[${totalTests}/20] $name ... PASS');
+            trace('[${totalTests}/23] $name ... PASS');
         } else {
             failures.push({ name : name, reason : result.reason });
-            trace('[${totalTests}/20] $name ... FAIL: ${result.reason}');
+            trace('[${totalTests}/23] $name ... FAIL: ${result.reason}');
         }
     }
 }
