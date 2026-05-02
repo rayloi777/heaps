@@ -928,7 +928,20 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function setDepth( depthBuffer : Null<h3d.mat.Texture> ) {
-		// TODO: implement when needed
+		if( depthBuffer == null ) return;
+		// End current render pass if active
+		if( inRenderPass ) {
+			MtlDrv.endRenderPass();
+			inRenderPass = false;
+		}
+		// Begin depth-only render pass (no color attachment)
+		var depthTex = @:privateAccess depthBuffer.t;
+		if( depthTex == null ) return;
+		MtlDrv.beginDepthOnlyPass(depthTex.res, 1.0);
+		inRenderPass = true;
+		passHasColor = false;
+		passHasDepth = true;
+		MtlDrv.setViewport(0, 0, depthBuffer.width, depthBuffer.height, 0, 1);
 	}
 
 	override function clear( ?color : h3d.Vector4, ?depth : Float, ?stencil : Int ) {
