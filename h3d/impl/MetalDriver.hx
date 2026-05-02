@@ -132,6 +132,7 @@ class MetalDriver extends h3d.impl.Driver {
 		MtlDrv.beginFrame();
 		inRenderPass = false;
 		curTexture = null;
+		currentShader = null;
 		// Begin default render pass with clear
 		beginDefaultPass(0, 0, 0, 0, 1.0, 0);
 	}
@@ -244,6 +245,66 @@ class MetalDriver extends h3d.impl.Driver {
 		// Rename "vertex " prefix + "main(" -> "vertex_main("
 		vsSource = renameMain(vsSource, "vertex_main");
 		fsSource = renameMain(fsSource, "fragment_main");
+		// Deduplicate helper function declarations between VS and FS.
+		// MslOut's decl() deduplicates within one shader, but when combining
+		// VS + FS into one source, shared helpers (mat3x4, mod, etc.) appear
+		// twice. Remove FS declarations that already exist in VS.
+		var vsDecls = new Map<String,Bool>();
+		for( line in vsSource.split("\n") ) {
+			var t = StringTools.trim(line);
+			if( t.charCodeAt(0) == 'f'.code || t.charCodeAt(0) == 'i'.code || t.charCodeAt(0) == 'u'.code )
+				vsDecls.set(t, true);
+		}
+		var fsLines = fsSource.split("\n");
+		var dedupBuf = new StringBuf();
+		for( line in fsLines ) {
+			var t = StringTools.trim(line);
+			if( vsDecls.exists(t) && (t.charCodeAt(0) == 'f'.code || t.charCodeAt(0) == 'i'.code || t.charCodeAt(0) == 'u'.code) )
+				continue; // skip duplicate declaration
+			dedupBuf.add(line);
+			dedupBuf.addChar("\n".code);
+		}
+		fsSource = dedupBuf.toString();
+		// Inject VS output varyings into FS input struct.
+		// MslOut compiles VS and FS independently. VS outputs varyings via
+		// [[user(locN)]] but the FS input struct doesn't include them.
+		// We extract varyings from VS output struct and inject into FS input.
+		{
+			var varyings = [];
+			var inOutput = false;
+			var braceDepth = 0;
+			for( line in vsSource.split("\n") ) {
+				var t = StringTools.trim(line);
+				if( t == "struct vs_output {" ) {
+					inOutput = true;
+					braceDepth = 1;
+					continue;
+				}
+				if( inOutput ) {
+					if( t.indexOf("{") >= 0 ) braceDepth++;
+					if( t.indexOf("}") >= 0 ) braceDepth--;
+					if( braceDepth <= 0 ) break;
+					if( t.indexOf("[[position]]") >= 0 ) continue;
+					if( t.indexOf("[[user(") < 0 ) continue;
+					varyings.push(t);
+				}
+			}
+			if( varyings.length > 0 ) {
+				var fsInputStart = fsSource.indexOf("struct fs_input {");
+				if( fsInputStart >= 0 ) {
+					var fsInputEnd = fsSource.indexOf("};", fsInputStart);
+					if( fsInputEnd >= 0 ) {
+						var inject = new StringBuf();
+						for( v in varyings ) {
+							inject.addChar("\t".code);
+							inject.add(v);
+							inject.addChar("\n".code);
+						}
+						fsSource = fsSource.substr(0, fsInputEnd) + inject.toString() + fsSource.substr(fsInputEnd);
+					}
+				}
+			}
+		}
 		// Add Metal header once, then combine vertex + fragment
 		var combinedSource = "#include <metal_stdlib>\nusing namespace metal;\n" + vsSource + "\n" + fsSource;
 
@@ -389,7 +450,6 @@ class MetalDriver extends h3d.impl.Driver {
 		var bytes = vertexCount * b.format.strideBytes;
 		var contents = b.vbuf.contents();
 		contents.blit(dstOffset, src, 0, bytes);
-		b.vbuf.didModifyRange(dstOffset, bytes);
 	}
 
 	override function uploadBufferBytes( b : h3d.Buffer, startVertex : Int, vertexCount : Int, buf : haxe.io.Bytes, bufPos : Int ) {
@@ -397,7 +457,6 @@ class MetalDriver extends h3d.impl.Driver {
 		var bytes = vertexCount * b.format.strideBytes;
 		var contents = b.vbuf.contents();
 		contents.blit(dstOffset, @:privateAccess buf.b, bufPos, bytes);
-		b.vbuf.didModifyRange(dstOffset, bytes);
 	}
 
 	override function uploadIndexData( i : h3d.Buffer, startIndice : Int, indiceCount : Int, buf : hxd.IndexBuffer, bufPos : Int ) {
@@ -407,7 +466,6 @@ class MetalDriver extends h3d.impl.Driver {
 		var bytes = indiceCount << bits;
 		var contents = i.vbuf.contents();
 		contents.blit(dstOffset, src, 0, bytes);
-		i.vbuf.didModifyRange(dstOffset, bytes);
 	}
 
 	override function readBufferBytes( b : h3d.Buffer, startVertex : Int, vertexCount : Int, buf : haxe.io.Bytes, bufPos : Int ) {
@@ -635,7 +693,6 @@ class MetalDriver extends h3d.impl.Driver {
 		}
 		var contents = gpuBuffer.contents();
 		contents.blit(0, data, 0, bytes);
-		gpuBuffer.didModifyRange(0, bytes);
 	}
 
 	override function uploadShaderBuffers( buffers : h3d.shader.Buffers, which : h3d.shader.Buffers.BufferKind ) {
@@ -1005,14 +1062,12 @@ class MetalDriver extends h3d.impl.Driver {
 		// Upload initial data
 		var contents = b.data.contents();
 		contents.blit(0, @:privateAccess bytes.b, 0, b.commandCount * 5 * 4);
-		b.data.didModifyRange(0, b.commandCount * 5 * 4);
 	}
 
 	override function uploadInstanceBufferBytes( b : h3d.impl.InstanceBuffer, startVertex : Int, vertexCount : Int, buf : haxe.io.Bytes, bufPos : Int ) {
 		var strideBytes = 5 * 4;
 		var contents = b.data.contents();
 		contents.blit(startVertex * strideBytes, @:privateAccess buf.b, bufPos, vertexCount * strideBytes);
-		b.data.didModifyRange(startVertex * strideBytes, vertexCount * strideBytes);
 	}
 
 	override function disposeInstanceBuffer( b : h3d.impl.InstanceBuffer ) {

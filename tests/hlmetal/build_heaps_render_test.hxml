@@ -1,0 +1,8 @@
+-cp /Users/rayloi/Documents/GitHub/heaps
+-cp /Users/rayloi/Documents/GitHub/heaps/tests/hlmetal
+-cp /Users/rayloi/Documents/GitHub/hashlink-master/libs/metal
+-D hlmetal
+-D hl_metal
+-L format
+-main HeapsRenderTest
+-hl heaps_render_test.hl
