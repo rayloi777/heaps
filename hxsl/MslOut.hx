@@ -700,6 +700,28 @@ class MslOut {
 				add(",");
 				addValue(e2, tabs);
 				add(")");
+			case [_, TVec(size, VFloat), TVec(_, VFloat)] if( switch(op) { case OpGt, OpLt, OpGte, OpLte, OpEq, OpNotEq: true; default: false; } ):
+				// Metal comparison on float vectors returns bool vector, not float.
+				// HLSL returns float vector (0.0/1.0), so convert using select().
+				var zero = "float" + size + "(0.)";
+				var one = "float" + size + "(1.)";
+				add("select(" + zero + ", " + one + ", ");
+				addValue(e1, tabs);
+				add(" ");
+				add(Printer.opStr(op));
+				add(" ");
+				addValue(e2, tabs);
+				add(")");
+			case [_, TVec(size, VInt), TVec(_, VInt)] if( switch(op) { case OpGt, OpLt, OpGte, OpLte, OpEq, OpNotEq: true; default: false; } ):
+				var zero = "int" + size + "(0)";
+				var one = "int" + size + "(1)";
+				add("select(" + zero + ", " + one + ", ");
+				addValue(e1, tabs);
+				add(" ");
+				add(Printer.opStr(op));
+				add(" ");
+				addValue(e2, tabs);
+				add(")");
 			default:
 				addValue(e1, tabs);
 				add(" ");
