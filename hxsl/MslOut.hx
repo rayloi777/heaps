@@ -61,8 +61,8 @@ class MslOut {
 		m.set(BVec3, "bool3");
 		m.set(BVec4, "bool4");
 		// Matrix constructors - Metal uses floatNxM like HLSL
-		m.set(Mat2, "float2x2");
-		m.set(Mat3, "float3x3");
+		m.set(Mat2, "mat2");
+		m.set(Mat3, "mat3");
 		m.set(Mat4, "float4x4");
 		m.set(Mat3x4, "mat3x4");
 		// Functions with different names in Metal
@@ -409,19 +409,159 @@ class MslOut {
 		}
 	}
 
+	function getIdent( v : TVar ) : String {
+		var n = varNames.get(v.id);
+		if( n != null ) return n;
+		n = v.name;
+		if( KWDS.get(n) ) n = "_" + n;
+		return n;
+	}
+
+	function collectFreeVars( e : TExpr, declared : Map<Int,Bool>, free : Map<Int,TVar> ) {
+		switch( e.e ) {
+		case TConst(_):
+		case TVar(v):
+			if( !declared.exists(v.id) ) free.set(v.id, v);
+		case TGlobal(_):
+		case TParenthesis(e2):
+			collectFreeVars(e2, declared, free);
+		case TBlock(el):
+			for( e2 in el ) collectFreeVars(e2, declared, free);
+		case TVarDecl(v, init):
+			declared.set(v.id, true);
+			if( init != null ) {
+				switch( init.e ) {
+				case TArrayDecl(el):
+					for( e2 in el ) collectFreeVars(e2, declared, free);
+				default:
+					collectFreeVars(init, declared, free);
+				}
+			}
+		case TBinop(_, e1, e2):
+			collectFreeVars(e1, declared, free);
+			collectFreeVars(e2, declared, free);
+		case TUnop(_, e1):
+			collectFreeVars(e1, declared, free);
+		case TIf(econd, eif, eelse):
+			collectFreeVars(econd, declared, free);
+			collectFreeVars(eif, declared, free);
+			if( eelse != null ) collectFreeVars(eelse, declared, free);
+		case TCall(e2, args):
+			collectFreeVars(e2, declared, free);
+			for( a in args ) collectFreeVars(a, declared, free);
+		case TSwiz(e2, _):
+			collectFreeVars(e2, declared, free);
+		case TSwitch(e2, cases, def):
+			collectFreeVars(e2, declared, free);
+			for( c in cases ) {
+				for( v in c.values ) collectFreeVars(v, declared, free);
+				collectFreeVars(c.expr, declared, free);
+			}
+			if( def != null ) collectFreeVars(def, declared, free);
+		case TFor(v, it, loop):
+			declared.set(v.id, true);
+			collectFreeVars(it, declared, free);
+			collectFreeVars(loop, declared, free);
+		case TWhile(it, loop, _):
+			collectFreeVars(it, declared, free);
+			collectFreeVars(loop, declared, free);
+		case TReturn(e2):
+			if( e2 != null ) collectFreeVars(e2, declared, free);
+		case TContinue:
+		case TBreak:
+		case TDiscard:
+		case TArray(e1, e2):
+			collectFreeVars(e1, declared, free);
+			collectFreeVars(e2, declared, free);
+		case TArrayDecl(el):
+			for( e2 in el ) collectFreeVars(e2, declared, free);
+		case TMeta(_, _, e2):
+			collectFreeVars(e2, declared, free);
+		case TField(e2, _):
+			collectFreeVars(e2, declared, free);
+		case TSyntax(_, _, _):
+		}
+	}
+
 	function addValue( e : TExpr, tabs : String ) {
 		switch( e.e ) {
 		case TBlock(el):
 			var name = "_val" + (exprIds++);
+			// Collect free variables from the block (referenced but not declared within)
+			var declared = new Map<Int, Bool>();
+			var freeVarMap = new Map<Int, TVar>();
+			var el2 = el.copy();
+			var last = el2[el2.length - 1];
+			el2[el2.length - 1] = { e : TReturn(last), t : e.t, p : last.p };
+			for( ex in el2 ) collectFreeVars(ex, declared, freeVarMap);
+			// Build parameter list, grouping shared resources (__params, __globals, _in)
+			var paramDecls = [];
+			var callArgs = [];
+			var addedShared = new Map<String, Bool>();
+			// Helper: add texture params for a variable (handles both direct and TArray textures)
+			function addTextureParams(v:TVar) {
+				var sams = samplers.get(v.id);
+				if( sams == null ) return;
+				// Determine the base texture type
+				var texType = switch( v.type ) {
+				case TArray(t, _): getTexType(t);
+				default: getTexType(v.type);
+				}
+				for( idx in sams ) {
+					paramDecls.push(texType + " tex" + idx);
+					callArgs.push("tex" + idx);
+				}
+				// Also pass sampler array if not already added
+				if( !addedShared.exists("__Samplers") && paramSamplerCount > 0 ) {
+					paramDecls.push("array<sampler," + paramSamplerCount + "> __Samplers");
+					callArgs.push("__Samplers");
+					addedShared.set("__Samplers", true);
+				}
+			}
+			// Helper: check if a type is or contains textures
+			function isTextureType(t:Type) {
+				return t.isTexture() || switch(t) { case TArray(st, _): st.isTexture(); default: false; };
+			}
+			for( vid in freeVarMap.keys() ) {
+				var v = freeVarMap.get(vid);
+				var acc = varAccess.get(v.id);
+				if( acc != null && !isTextureType(v.type) ) {
+					if( acc == "__params." && !addedShared.exists("__params") ) {
+						paramDecls.push("constant " + stagePrefix + "Params& __params");
+						callArgs.push("__params");
+						addedShared.set("__params", true);
+					} else if( acc == "__globals." && !addedShared.exists("__globals") ) {
+						paramDecls.push("constant " + stagePrefix + "Globals& __globals");
+						callArgs.push("__globals");
+						addedShared.set("__globals", true);
+					} else if( acc == "_in." && !addedShared.exists("_in") ) {
+						paramDecls.push(stagePrefix + "input _in");
+						callArgs.push("_in");
+						addedShared.set("_in", true);
+					}
+				} else if( isTextureType(v.type) ) {
+					// Texture variable - look up sampler indices to get texN names
+					addTextureParams(v);
+				} else {
+					// Local variable - pass by value
+					var typeBuf = new StringBuf();
+					var oldBuf = buf;
+					buf = typeBuf;
+					addType(v.type);
+					buf = oldBuf;
+					paramDecls.push(typeBuf.toString() + " " + getIdent(v));
+					callArgs.push(getIdent(v));
+				}
+			}
+			// Generate helper function with parameters
 			var tmp = buf;
 			buf = new StringBuf();
 			addType(e.t);
 			add(" ");
 			add(name);
-			add("(void)");
-			var el2 = el.copy();
-			var last = el2[el2.length - 1];
-			el2[el2.length - 1] = { e : TReturn(last), t : e.t, p : last.p };
+			add("(");
+			add(paramDecls.join(", "));
+			add(")");
 			var e2 : TExpr = {
 				t : TVoid,
 				e : TBlock(el2),
@@ -430,8 +570,11 @@ class MslOut {
 			addExpr(e2, "");
 			exprValues.push(buf.toString());
 			buf = tmp;
+			// Generate call with arguments
 			add(name);
-			add("()");
+			add("(");
+			add(callArgs.join(", "));
+			add(")");
 		case TIf(econd, eif, eelse):
 			add("( ");
 			addValue(econd, tabs);
@@ -582,6 +725,7 @@ class MslOut {
 				addValue(init, tabs);
 			} else {
 				addVar(v);
+				add(";");
 			}
 		case TCall({ e : TGlobal(SetLayout) }, _):
 			// ignore
@@ -1225,8 +1369,8 @@ class MslOut {
 		if( !isCompute )
 			add("\t" + stagePrefix + "output _out = {};\n");
 
+
 		// Emit body
-		var declaredLocals = new Map();
 		switch( expr.e ) {
 		case TBlock(el):
 			for( e in el ) {
@@ -1234,18 +1378,11 @@ class MslOut {
 				case TBinop(OpAssign, { e : TVar(v) }, _) if( v.qualifiers != null && v.qualifiers.indexOf(Final) >= 0 ):
 					// ignore (is a static const)
 					continue;
-				case TBinop(OpAssign, { e : TVar(v) }, einit) if( !declaredLocals.exists(v.id) && v.kind == Local ):
-					declaredLocals.set(v.id, true);
-					add("\t");
-					addVar(v);
-					add(" = ");
-					addValue(einit, "\t");
-					newLine(e);
 				default:
-					add("\t");
-					addExpr(e, "\t");
-					newLine(e);
 				}
+				add("\t");
+				addExpr(e, "\t");
+				newLine(e);
 			}
 		default:
 			addExpr(expr, "");
@@ -1257,9 +1394,32 @@ class MslOut {
 	}
 
 	function initLocals(s : ShaderData) {
-		// Locals are now declared inline in TVarDecl, so no forward declarations needed.
-		// Just append the main function bodies.
-		for( e in exprValues ) {
+		// Forward-declare Local variables that have NO TVarDecl in the IR.
+		// Variables with TVarDecl get inline type declarations via addVar().
+		// Only inject into the main function body, not _val helpers.
+		var fwdBuf = new StringBuf();
+		var fwdSet = new Map();
+		for( v in s.vars ) {
+			if( v.kind == Local && !locals.exists(v.id) && !fwdSet.exists(v.id) ) {
+				fwdSet.set(v.id, true);
+				fwdBuf.add("\t");
+				var oldBuf = buf;
+				buf = fwdBuf;
+				addVar(v);
+				buf = oldBuf;
+				fwdBuf.add(";\n");
+			}
+		}
+		var fwdDecl = fwdBuf.toString();
+		// Only inject forward declarations into the LAST exprValue (main function body),
+		// not into _val helper functions.
+		for( i in 0...exprValues.length ) {
+			var e = exprValues[i];
+			if( i == exprValues.length - 1 && fwdDecl.length > 0 ) {
+				var braceIdx = e.indexOf("{\n");
+				if( braceIdx >= 0 )
+					e = e.substr(0, braceIdx + 2) + fwdDecl + e.substr(braceIdx + 2);
+			}
 			add(e);
 			add("\n\n");
 		}
