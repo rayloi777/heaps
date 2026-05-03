@@ -356,6 +356,75 @@ class Window {
 			return true;
 		}
 
+	#elseif hlmetal
+
+		function get_vsync() : Bool return true;
+
+		function set_vsync( b : Bool ) : Bool {
+			return true;
+		}
+
+		function get_isFocused() : Bool return true;
+
+		static var metalEventQueue : Array<{ type:Int, mouseX:Int, mouseY:Int, button:Int, wheelDelta:Float, keyCode:Int, scanCode:Int }> = [];
+
+		static function onMetalEvent( type:Int, mouseX:Int, mouseY:Int, button:Int, wheelDelta:Float, keyCode:Int, scanCode:Int ) : Void {
+			metalEventQueue.push({ type: type, mouseX: mouseX, mouseY: mouseY, button: button, wheelDelta: wheelDelta, keyCode: keyCode, scanCode: scanCode });
+		}
+
+		static function processMetalEvents() : Void {
+			var q = metalEventQueue;
+			metalEventQueue = [];
+			trace("processMetalEvents: " + q.length + " events, inst=" + (inst != null) + ", targets=" + (inst != null ? inst.eventTargets.length : -1));
+			var w = inst;
+			if( w == null ) return;
+			for( e in q ) {
+				var eh : Event = null;
+				switch( e.type ) {
+				case 8: // MouseDown
+					w.curMouseX = e.mouseX;
+					w.curMouseY = e.mouseY;
+					eh = new Event(EPush, e.mouseX, e.mouseY);
+					eh.button = switch( e.button ) {
+					case 0: 0;
+					case 1: 2;
+					case 2: 1;
+					case x: x;
+					}
+				case 9: // MouseUp
+					w.curMouseX = e.mouseX;
+					w.curMouseY = e.mouseY;
+					eh = new Event(ERelease, e.mouseX, e.mouseY);
+					eh.button = switch( e.button ) {
+					case 0: 0;
+					case 1: 2;
+					case 2: 1;
+					case x: x;
+					}
+				case 10: // MouseMove
+					w.curMouseX = e.mouseX;
+					w.curMouseY = e.mouseY;
+					eh = new Event(EMove, e.mouseX, e.mouseY);
+				case 11: // MouseWheel
+					eh = new Event(EWheel, w.curMouseX, w.curMouseY);
+					eh.wheelDelta = -e.wheelDelta;
+				case 12: // KeyDown
+					eh = new Event(EKeyDown, w.curMouseX, w.curMouseY);
+					eh.keyCode = e.keyCode;
+				case 13: // KeyUp
+					eh = new Event(EKeyUp, w.curMouseX, w.curMouseY);
+					eh.keyCode = e.keyCode;
+				default:
+				}
+				if( eh != null ) w.event(eh);
+			}
+		}
+
+		function onEvent( e : Event ) : Bool {
+			event(e);
+			return true;
+		}
+
 	#elseif (hldx||hlsdl)
 
 	function get_vsync() : Bool return window.vsync;

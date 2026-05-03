@@ -74,6 +74,8 @@ class System {
 		dx.Loop.processEvents(@:privateAccess hxd.Window.dispatchEvent);
 		#elseif hlsdl
 		sdl.Sdl.processEvents(@:privateAccess hxd.Window.dispatchEvent);
+		#elseif hlmetal
+		@:privateAccess hxd.Window.processMetalEvents();
 		#end
 
 		// loop
@@ -124,6 +126,10 @@ class System {
 		#end
 
 		@:privateAccess Window.inst = createWindow();
+
+		#if hlmetal
+		metal.Window.setEventCallback(@:privateAccess hxd.Window.onMetalEvent);
+		#end
 
 		init();
 		#end
