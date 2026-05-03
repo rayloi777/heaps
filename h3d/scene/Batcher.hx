@@ -136,25 +136,33 @@ class Batcher extends h3d.scene.Object {
 		return batchID;
 	}
 
-	public function addInstance( obj : h3d.scene.Object ) : ObjectInstance {
+	public function addInstance( obj : h3d.scene.Object, recChildren : Bool = true ) : ObjectInstance {
 		var meshes = [];
 		var invPos = obj.getInvPos();
 		var renderer = getScene().renderer;
-		for ( m in obj.getMeshes() ) {
+		inline function processMesh( m : h3d.scene.Mesh ) {
 			var hmd = Std.downcast(m.primitive, h3d.prim.HMDModel);
-			if ( hmd == null )
-				continue;
+			if ( hmd != null ) {
+				var batchID = getBatchID(hmd);
+				var batch = batches[batchID];
 
-			var batchID = getBatchID(hmd);
-			var batch = batches[batchID];
+				var subMeshID = batch.addModel(m);
+				var materials = [];
+				for ( m in m.getMeshMaterials() )
+					materials.push(batch.addMaterial(m, renderer));
 
-			var subMeshID = batch.addModel(m);
-			var materials = [];
-			for ( m in m.getMeshMaterials() )
-				materials.push(batch.addMaterial(m, renderer));
+				var meshInstance = new MeshInstance(m.getAbsPos() * invPos, batchID, subMeshID, materials);
+				meshes.push(meshInstance);
+			}
+		}
 
-			var meshInstance = new MeshInstance(m.getAbsPos() * invPos, batchID, subMeshID, materials);
-			meshes.push(meshInstance);
+		if ( recChildren )
+			for ( m in obj.getMeshes() )
+				processMesh(m);
+		else {
+			var m = Std.downcast(obj, h3d.scene.Mesh);
+			if ( m != null )
+				processMesh(m);
 		}
 		return new ObjectInstance(meshes);
 	}
@@ -657,7 +665,7 @@ private class BatchCommandBuilder extends hxsl.Shader {
 
 				var offscreen = false;
 				var aabbCornersUVSpace = [ vec2(0), vec2(0), vec2(0), vec2(0) ];
-				var aabbMinMax = [ 1e30, 0.0, 1e30, 0.0 ]; // minX, maxX, minY, maxY
+				var aabbMinMax = [ 1e30, -1e30, 1e30, -1e30 ]; // minX, maxX, minY, maxY
 				@unroll for ( i in 0...4 ) {
 					var cornerViewSpace = aabbCornersViewSpace[i];
 					var cornerScreenPos = vec4(cornerViewSpace, 1.0) * camera.proj;
@@ -670,7 +678,7 @@ private class BatchCommandBuilder extends hxsl.Shader {
 					aabbMinMax[2] = min(aabbMinMax[2], aabbCornersUVSpace[i].y);
 					aabbMinMax[3] = max(aabbMinMax[3], aabbCornersUVSpace[i].y);
 
-					if ( aabbCornersUVSpace[i].x < 0.0 || aabbCornersUVSpace[i].x > 1.0 || aabbCornersUVSpace[i].y < 0.0 || aabbCornersUVSpace[i].y > 1.0 )
+					if ( aabbCornersUVSpace[i].x <= 0.0 || aabbCornersUVSpace[i].x >= 1.0 || aabbCornersUVSpace[i].y <= 0.0 || aabbCornersUVSpace[i].y >= 1.0 )
 						offscreen = true;
 				}
 
@@ -680,11 +688,12 @@ private class BatchCommandBuilder extends hxsl.Shader {
 				var w = max(texelSize.x, texelSize.y);
 
 				var mip = floor(log2(w));
+				var mipSize = max(vec2(1.0), floor(hzbSize / pow(vec2(2.0), vec2(mip))));
 
 				var depth = 0.0;
 				@unroll for ( i in 0...4 ) {
-					var cornerPos = ivec2(aabbCornersUVSpace[i] * hzbSize);
-					var cornerDepth = hzb.fetch(cornerPos).x;
+					var cornerPos = ivec2(aabbCornersUVSpace[i] * mipSize);
+					var cornerDepth = hzb.fetchLod(cornerPos, int(mip)).x;
 					depth = max(depth, cornerDepth);
 				}
 
