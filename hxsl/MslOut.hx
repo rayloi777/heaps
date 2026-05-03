@@ -61,8 +61,8 @@ class MslOut {
 		m.set(BVec3, "bool3");
 		m.set(BVec4, "bool4");
 		// Matrix constructors - Metal uses floatNxM like HLSL
-		m.set(Mat2, "mat2");
-		m.set(Mat3, "mat3");
+		m.set(Mat2, "float2x2");
+		m.set(Mat3, "float3x3");
 		m.set(Mat4, "float4x4");
 		m.set(Mat3x4, "mat3x4");
 		// Functions with different names in Metal
@@ -747,7 +747,6 @@ class MslOut {
 				addValue(init, tabs);
 			} else {
 				addVar(v);
-				add(";");
 			}
 		case TCall({ e : TGlobal(SetLayout) }, _):
 			// ignore
@@ -870,6 +869,12 @@ class MslOut {
 				add(g.getName().toLowerCase());
 			case [IVec2 | IVec3 | IVec4, [{ t : TInt }] | [{ t : TFloat }]]:
 				add(g.getName().toLowerCase());
+			case [Mat3, [{ t : TMat4 }]]:
+				add("mat3");
+			case [Mat3, [{ t : TMat3x4 }]]:
+				add("mat3");
+			case [Mat2, [{ t : TMat4 }]]:
+				add("mat2");
 			default:
 				addValue(e2, tabs);
 			}
@@ -1433,8 +1438,7 @@ class MslOut {
 			}
 		}
 		var fwdDecl = fwdBuf.toString();
-		// Only inject forward declarations into the LAST exprValue (main function body),
-		// not into _val helper functions.
+		// Only inject forward declarations into the LAST exprValue (main function body).
 		for( i in 0...exprValues.length ) {
 			var e = exprValues[i];
 			if( i == exprValues.length - 1 && fwdDecl.length > 0 ) {
