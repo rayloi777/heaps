@@ -1125,8 +1125,24 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function capturePixels( tex : h3d.mat.Texture, layer : Int, mipLevel : Int, ?region : h2d.col.IBounds ) : hxd.Pixels {
-		throw "Pixel capture not supported on Metal yet";
-		return null;
+		if( tex.t == null ) return null;
+		var x = 0, y = 0, w = tex.width, h = tex.height;
+		if( region != null ) {
+			if( region.xMax > w ) region.xMax = w;
+			if( region.yMax > h ) region.yMax = h;
+			if( region.xMin < 0 ) region.xMin = 0;
+			if( region.yMin < 0 ) region.yMin = 0;
+			x = region.xMin;
+			y = region.yMin;
+			w = region.width;
+			h = region.height;
+		}
+		w >>= mipLevel; if( w == 0 ) w = 1;
+		h >>= mipLevel; if( h == 0 ) h = 1;
+		var pixels = hxd.Pixels.alloc(w, h, tex.format);
+		var stride = hxd.Pixels.calcStride(w, tex.format);
+		MtlDrv.textureReadPixels(tex.t.res, x, y, w, h, @:privateAccess pixels.bytes, stride);
+		return pixels;
 	}
 
 	override function copyTexture( from : h3d.mat.Texture, to : h3d.mat.Texture ) {
