@@ -63,7 +63,7 @@ class MslOut {
 		// Matrix constructors - Metal uses floatNxM like HLSL
 		m.set(Mat2, "float2x2");
 		m.set(Mat3, "float3x3");
-		m.set(Mat4, "float4x4");
+		m.set(Mat4, "mat4");
 		m.set(Mat3x4, "mat3x4");
 		// Functions with different names in Metal
 		m.set(LReflect, "reflect");
@@ -304,7 +304,7 @@ class MslOut {
 			decl("float4x3 mat3x4( float4 a, float4 b, float4 c ) { return float4x3(float3(a.x, b.x, c.x), float3(a.y, b.y, c.y), float3(a.z, b.z, c.z), float3(a.w, b.w, c.w)); }");
 			decl("float4x3 mat3x4( float4x4 m ) { return float4x3(float3(m[0].x, m[1].x, m[2].x), float3(m[0].y, m[1].y, m[2].y), float3(m[0].z, m[1].z, m[2].z), float3(m[0].w, m[1].w, m[2].w)); }");
 		case Mat4:
-			decl("float4x4 mat4( float4 a, float4 b, float4 c, float4 d ) { return float4x4(a,b,c,d); }");
+			decl("float4x4 mat4( float4 a, float4 b, float4 c, float4 d ) { return float4x4(float4(a.x, b.x, c.x, d.x), float4(a.y, b.y, c.y, d.y), float4(a.z, b.z, c.z, d.z), float4(a.w, b.w, c.w, d.w)); }");
 		case Mat3:
 			decl("float3x3 mat3( float4x4 m ) { return float3x3(m[0].xyz, m[1].xyz, m[2].xyz); }");
 			decl("float3x3 mat3( float4x3 m ) { return float3x3(float3(m[0].x,m[1].x,m[2].x), float3(m[0].y,m[1].y,m[2].y), float3(m[0].z,m[1].z,m[2].z)); }");
