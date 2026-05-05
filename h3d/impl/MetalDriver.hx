@@ -67,6 +67,11 @@ class MetalDriver extends h3d.impl.Driver {
 	var passHasColor : Bool = false;
 	var passHasDepth : Bool = false;
 
+	// Depth-only pass tracking (shadow maps)
+	var curDepthOnlyTex : metal.Driver.Texture;
+	var curDepthOnlyW : Int = 0;
+	var curDepthOnlyH : Int = 0;
+
 	// Depth/stencil state cache
 	var depthStencilStates : Map<Int, DepthStencilState>;
 	var currentDepthStencilState : DepthStencilState;
@@ -110,6 +115,9 @@ class MetalDriver extends h3d.impl.Driver {
 		paramsPool = new Array();
 		paramsPoolIdx = 0;
 		inRenderPass = false;
+		curDepthOnlyTex = null;
+		curDepthOnlyW = 0;
+		curDepthOnlyH = 0;
 	}
 
 	override function dispose() {
@@ -146,6 +154,7 @@ class MetalDriver extends h3d.impl.Driver {
 		MtlDrv.beginFrame();
 		inRenderPass = false;
 		curTexture = null;
+		curDepthOnlyTex = null;
 		// Don't reset currentShader — the pipeline state must be re-set on
 		// each new render pass, but we need to remember which shader is active
 		// so selectMaterial() can create the correct pipeline.
@@ -288,8 +297,9 @@ class MetalDriver extends h3d.impl.Driver {
 		fsSource = dedupBuf.toString();
 		// Inject VS output varyings into FS input struct.
 		// MslOut compiles VS and FS independently. VS outputs varyings via
-		// [[user(locN)]] but the FS input struct doesn't include them.
-		// We extract varyings from VS output struct and inject into FS input.
+		// [[user(locN)]] but the FS input struct may already have some.
+		// We extract varyings from VS output struct and inject into FS input,
+		// skipping any that already exist in the FS input struct.
 		{
 			var varyings = [];
 			var inOutput = false;
@@ -311,17 +321,33 @@ class MetalDriver extends h3d.impl.Driver {
 				}
 			}
 			if( varyings.length > 0 ) {
+				// Collect existing [[user(locN)]] bindings in FS input
+				var fsLocs = new Map<String,Bool>();
 				var fsInputStart = fsSource.indexOf("struct fs_input {");
 				if( fsInputStart >= 0 ) {
 					var fsInputEnd = fsSource.indexOf("};", fsInputStart);
 					if( fsInputEnd >= 0 ) {
+						var fsInputBlock = fsSource.substr(fsInputStart, fsInputEnd - fsInputStart);
+						for( line in fsInputBlock.split("\n") ) {
+							var m = line.indexOf("[[user(");
+							if( m >= 0 ) {
+								var loc = line.substr(m, line.indexOf(")", m) - m + 1);
+								fsLocs.set(loc, true);
+							}
+						}
+						// Inject only varyings not already in FS input
 						var inject = new StringBuf();
 						for( v in varyings ) {
+							var m = v.indexOf("[[user(");
+							var loc = v.substr(m, v.indexOf(")", m) - m + 1);
+							if( fsLocs.exists(loc) ) continue;
 							inject.addChar("\t".code);
 							inject.add(v);
 							inject.addChar("\n".code);
 						}
-						fsSource = fsSource.substr(0, fsInputEnd) + inject.toString() + fsSource.substr(fsInputEnd);
+						var injectStr = inject.toString();
+						if( injectStr.length > 0 )
+							fsSource = fsSource.substr(0, fsInputEnd) + injectStr + fsSource.substr(fsInputEnd);
 					}
 				}
 			}
@@ -509,6 +535,10 @@ class MetalDriver extends h3d.impl.Driver {
 		case RG16F: PixelFormat.RG16Float;
 		case RG32F: PixelFormat.RG32Float;
 		case SRGB_ALPHA: PixelFormat.RGBA8Unorm_sRGB;
+		case Depth16: PixelFormat.Depth16Unorm;
+		case Depth24, Depth24Stencil8: PixelFormat.Depth24Unorm_Stencil8;
+		case Depth32: PixelFormat.Depth32Float;
+		case Depth32Stencil8: PixelFormat.Depth32Float_Stencil8;
 		default: PixelFormat.BGRA8Unorm;
 		}
 	}
@@ -902,13 +932,14 @@ class MetalDriver extends h3d.impl.Driver {
 
 	override function setRenderTarget( tex : Null<h3d.mat.Texture>, layer = 0, mipLevel = 0, depthBinding : h3d.Engine.DepthBinding = ReadWrite ) {
 		if( tex == null ) {
-			if( curTexture != null ) {
-				// Switching from texture target back to backbuffer — end current pass
+			if( curTexture != null || curDepthOnlyTex != null ) {
+				// Switching from texture/depth target back to backbuffer — end current pass
 				if( inRenderPass ) {
 					MtlDrv.endRenderPass();
 					inRenderPass = false;
 				}
 				curTexture = null;
+				curDepthOnlyTex = null;
 				// Begin new default render pass for backbuffer
 				beginDefaultPass(0, 0, 0, 0, 1.0, 0);
 			}
@@ -984,7 +1015,11 @@ class MetalDriver extends h3d.impl.Driver {
 		inRenderPass = true;
 		passHasColor = false;
 		passHasDepth = true;
-		MtlDrv.setViewport(0, 0, depthBuffer.width, depthBuffer.height, 0, 1);
+		// Track depth-only state so clear() can restart depth-only pass
+		curDepthOnlyTex = depthTex.res;
+		curDepthOnlyW = depthBuffer.width;
+		curDepthOnlyH = depthBuffer.height;
+		MtlDrv.setViewport(0, 0, curDepthOnlyW, curDepthOnlyH, 0, 1);
 	}
 
 	override function clear( ?color : h3d.Vector4, ?depth : Float, ?stencil : Int ) {
@@ -1005,7 +1040,14 @@ class MetalDriver extends h3d.impl.Driver {
 		var d = depth != null ? depth : 1.0;
 		var s = stencil != null ? stencil : 0;
 
-		if( curTexture != null ) {
+		if( curDepthOnlyTex != null ) {
+			// Restart depth-only pass (shadow map pass)
+			MtlDrv.beginDepthOnlyPass(curDepthOnlyTex, d);
+			inRenderPass = true;
+			passHasColor = false;
+			passHasDepth = true;
+			MtlDrv.setViewport(0, 0, curDepthOnlyW, curDepthOnlyH, 0, 1);
+		} else if( curTexture != null ) {
 			var hasDepth = curTexture.depthBuffer != null;
 			var depthTex : Texture = hasDepth ? @:privateAccess curTexture.depthBuffer.t : null;
 			MtlDrv.beginRenderPassEx(
