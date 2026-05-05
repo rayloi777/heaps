@@ -57,9 +57,6 @@ class MetalDriver extends h3d.impl.Driver {
 	var currentStencilMaskBits : Int = -1;
 	var currentStencilRef : Int = 0;
 	var outputWidth : Int;
-	#if hlmetal_msl_debug
-	var shaderCounter : Int = 0;
-	#end
 	var outputHeight : Int;
 	var defaultDepthTex : metal.Driver.Texture;
 	var curTexture : h3d.mat.Texture;
@@ -76,13 +73,6 @@ class MetalDriver extends h3d.impl.Driver {
 
 	// Sampler state cache
 	var samplerStates : Map<Int, SamplerState>;
-	#if hlmetal_msl_debug
-	var texBindLog : Int = 0;
-	var samplerBindLog : Int = 0;
-	var drawSeqLog : Int = 0;
-	var callSeq : Int = 0;
-	#end
-
 	// Pipeline cache keyed by (shader.id, materialBits)
 	var pipelineCache : Map<String, PipelineState>;
 
@@ -141,14 +131,16 @@ class MetalDriver extends h3d.impl.Driver {
 		outputWidth = 800;
 		outputHeight = 600;
 		defaultDepthTex = MtlDrv.createTexture2D(800, 600, cast PixelFormat.Depth32Float, 1, 1, 0);
-		haxe.Timer.delay(onCreate.bind(false), 1);
+		// Wrap onCreate to fix engine dimensions — hxd.Window returns 0 for Metal backend,
+		// causing Engine.onCreate to resize(0,0)→(32,32) which creates drawable/depth size mismatch
+		haxe.Timer.delay(function() {
+			onCreate(false);
+			var engine = h3d.Engine.getCurrent();
+			if( engine != null ) engine.resize(outputWidth, outputHeight);
+		}, 1);
 	}
 
 	override function begin( frame : Int ) {
-		#if hlmetal_msl_debug
-		callSeq = 0; drawSeqLog = 0; texBindLog = 0; samplerBindLog = 0;
-		trace("[" + (callSeq++) + "] BEGIN frame=" + frame);
-		#end
 		paramsPoolIdx = 0;
 		this.frame = frame;
 		MtlDrv.beginFrame();
@@ -337,14 +329,6 @@ class MetalDriver extends h3d.impl.Driver {
 		// Add Metal header once, then combine vertex + fragment
 		var combinedSource = "#include <metal_stdlib>\nusing namespace metal;\n" + vsSource + "\n" + fsSource;
 
-		#if hlmetal_msl_debug
-		var shaderIdx = shaderCounter++;
-		var vsFile = sys.io.File.write("shader_" + shaderIdx + "_combined.msl");
-		vsFile.writeString(combinedSource);
-		vsFile.close();
-		trace("Saved shader source to shader_" + shaderIdx + "_combined.msl");
-		#end
-
 		s.library = MtlDrv.compileShader(combinedSource, "vertex_main");
 
 		// Build shader contexts (constant buffers, texture info)
@@ -381,7 +365,7 @@ class MetalDriver extends h3d.impl.Driver {
 		for( i in 0...inputs.length ) {
 			var e = new LayoutElement();
 			e.attributeIndex = i;
-			e.bufferIndex = 0;
+			e.bufferIndex = 2;
 			e.offset = offset;
 			var input = inputs[i];
 			e.format = vertexFormatFromInput(input.type);
@@ -446,9 +430,6 @@ class MetalDriver extends h3d.impl.Driver {
 		}
 		if( s == currentShader )
 			return false;
-		#if hlmetal_msl_debug
-	if( drawSeqLog < 20 ) trace("[" + (callSeq++) + "] selectShader: id=" + Std.string(shader.id));
-	#end
 		currentShader = s;
 		// Create or get pipeline with correct color format for current render target
 		var blendDesc = new BlendDesc();
@@ -543,9 +524,6 @@ class MetalDriver extends h3d.impl.Driver {
 			usage = usage | TextureUsage.RenderTarget;
 
 		var pixelFormat = getPixelFormat(t);
-		#if hlmetal_msl_debug
-		trace("allocTexture: " + t.width + "x" + t.height + " fmt=" + t.format + " rt=" + rt + " name=" + t.name);
-		#end
 		// Use Shared storage for non-RT textures so CPU can upload directly.
 		// Private storage requires blit encoder which can have sync issues.
 		var storage = rt ? StorageMode.Private : StorageMode.Shared;
@@ -576,29 +554,6 @@ class MetalDriver extends h3d.impl.Driver {
 		pixels.convert(t.format);
 		var stride = @:privateAccess pixels.stride;
 		var tex = t.t;
-		#if hlmetal_msl_debug
-		// Sample first few bytes of pixel data
-		var b = @:privateAccess pixels.bytes;
-		var off = @:privateAccess pixels.offset;
-		var sample = "";
-		if( b != null ) {
-			for( i in 0...32 ) {
-				var v = b.get(off + i);
-				sample += (v < 16 ? "0" : "") + StringTools.hex(v) + " ";
-			}
-		}
-		trace("uploadTexture: " + t.name + " " + pixels.width + "x" + pixels.height + " stride=" + stride + " fmt=" + t.format + " data=[" + sample + "...]");
-		// Sample glyph area (row 15, col 39 = 'A')
-		if( b != null && pixels.width == 128 ) {
-			var off2 = off + 15 * stride + 39 * 4;
-			var gs = "";
-			for( i in 0...16 ) {
-				var v = b.get(off2 + i);
-				gs += (v < 16 ? "0" : "") + StringTools.hex(v) + " ";
-			}
-			trace("  glyph@39,15: [" + gs + "...]");
-		}
-		#end
 		if( tex == null ) return;
 		MtlDrv.textureReplaceRegion(tex.res, mipLevel, 0, 0, pixels.width, pixels.height,
 			@:privateAccess (pixels.bytes : hl.Bytes).offset(pixels.offset), stride);
@@ -692,9 +647,6 @@ class MetalDriver extends h3d.impl.Driver {
 		if( bits == currentMaterialBits && stOpBits == currentStencilOpBits && stMaskBits == currentStencilMaskBits )
 			return;
 
-		#if hlmetal_msl_debug
-	if( drawSeqLog < 20 ) trace("[" + (callSeq++) + "] selectMaterial: bits=" + Std.string(bits));
-	#end
 		currentMaterialBits = bits;
 		currentStencilOpBits = stOpBits;
 		currentStencilMaskBits = stMaskBits;
@@ -768,9 +720,6 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function uploadShaderBuffers( buffers : h3d.shader.Buffers, which : h3d.shader.Buffers.BufferKind ) {
-		#if hlmetal_msl_debug
-		if( drawSeqLog < 20 ) trace("[" + (callSeq++) + "] uploadShaderBuffers: " + which + " shader=" + (currentShader != null ? Std.string(currentShader.shader.id) : "null"));
-		#end
 		if( currentShader == null ) return;
 		uploadBuffers(buffers, currentShader.vertex, buffers.vertex, which, true);
 		uploadBuffers(buffers, currentShader.fragment, buffers.fragment, which, false);
@@ -831,21 +780,11 @@ class MetalDriver extends h3d.impl.Driver {
 				t.lastFrame = frame;
 				if( t.t != null ) {
 					var tex = t.t.res;
-					#if hlmetal_msl_debug
-					if( texBindLog < 20 ) {
-						trace("[" + (callSeq++) + "] bindTex[" + i + "]: " + t.name + " " + t.width + "x" + t.height + " isV=" + isVertex);
-						texBindLog++;
-					}
-					#end
 					if( isVertex )
 						MtlDrv.setVertexTexture(tex, i);
 					else {
 						MtlDrv.setFragmentTexture(tex, i);
 						// Also verify texture is valid by querying native
-						#if hlmetal_msl_debug
-						if( texBindLog <= 2 )
-							trace("  setFragmentTexture done, inRenderPass=" + inRenderPass);
-						#end
 					}
 
 					// Sampler
@@ -873,12 +812,6 @@ class MetalDriver extends h3d.impl.Driver {
 							0, 1e30, t.anisotropicMaxLevel, 0);
 						samplerStates.set(samplerBits, sampler);
 					}
-					#if hlmetal_msl_debug
-					if( samplerBindLog < 3 ) {
-						trace("setSampler[" + i + "]: " + sampler);
-						samplerBindLog++;
-					}
-					#end
 					if( isVertex )
 						MtlDrv.setVertexSampler(sampler, i);
 					else
@@ -907,8 +840,8 @@ class MetalDriver extends h3d.impl.Driver {
 
 	override function selectBuffer( buffer : h3d.Buffer ) {
 		if( currentShader == null ) return;
-		// Set vertex buffer at index 0
-		MtlDrv.setVertexBuffer(buffer.vbuf, 0, 0);
+		// Buffer 0=globals, 1=params, 2=vertex data
+		MtlDrv.setVertexBuffer(buffer.vbuf, 0, 2);
 	}
 
 	override function selectMultiBuffers( format : hxd.BufferFormat.MultiFormat, buffers : Array<h3d.Buffer> ) {
@@ -917,17 +850,11 @@ class MetalDriver extends h3d.impl.Driver {
 		for( i in 0...map.length ) {
 			var inf = map[i];
 			var buf = buffers[inf.bufferIndex];
-			MtlDrv.setVertexBuffer(buf.vbuf, inf.offset, i);
+			MtlDrv.setVertexBuffer(buf.vbuf, inf.offset, i + 2);
 		}
 	}
 
 	override function draw( ibuf : h3d.Buffer, startIndex : Int, ntriangles : Int ) {
-		#if hlmetal_msl_debug
-		if( drawSeqLog < 20 ) {
-			trace("[" + (callSeq++) + "] DRAW: allow=" + allowDraw + " start=" + startIndex + " ntri=" + ntriangles + " shader=" + (currentShader != null ? Std.string(currentShader.shader.id) : "null"));
-			drawSeqLog++;
-		}
-		#end
 		if( !allowDraw ) return;
 		if( currentIndex != ibuf ) {
 			currentIndex = ibuf;
@@ -967,6 +894,8 @@ class MetalDriver extends h3d.impl.Driver {
 		passHasColor = true;
 		passHasDepth = true;
 		curColorFormat = cast PixelFormat.BGRA8Unorm;
+		// Set viewport on every new render encoder — Metal default viewport may not match attachment
+		MtlDrv.setViewport(0, 0, outputWidth, outputHeight, 0, 1);
 	}
 
 	var tmpTextures = new Array<h3d.mat.Texture>();
@@ -1110,6 +1039,17 @@ class MetalDriver extends h3d.impl.Driver {
 	// ---- Resize ----
 
 	override function resize( width : Int, height : Int ) {
+		// Guard: hxd.Window returns 0 for Metal backend, causing Engine.onCreate
+		// to pass (0,0) which clamps to (32,32) - far too small.
+		// Use actual Metal window dimensions if available.
+		if( metalWindow != null ) {
+			var winW = metal.Window.getWidth(metalWindow);
+			var winH = metal.Window.getHeight(metalWindow);
+			if( winW > 0 && winH > 0 && (width < winW || height < winH) ) {
+				width = winW;
+				height = winH;
+			}
+		}
 		outputWidth = width;
 		outputHeight = height;
 		if( !MtlDrv.resize(width, height) )
@@ -1120,6 +1060,8 @@ class MetalDriver extends h3d.impl.Driver {
 			if( defaultDepthInst.t != null ) disposeDepthBuffer(defaultDepthInst);
 			defaultDepthInst.t = allocDepthBuffer(defaultDepthInst);
 		}
+		// Recreate defaultDepthTex to match new drawable size
+		defaultDepthTex = MtlDrv.createTexture2D(width, height, cast PixelFormat.Depth32Float, 1, 1, 0);
 		MtlDrv.setViewport(0, 0, width, height, 0, 1);
 	}
 
