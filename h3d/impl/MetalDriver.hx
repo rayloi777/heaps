@@ -918,13 +918,20 @@ class MetalDriver extends h3d.impl.Driver {
 
 	// ---- Render Targets ----
 
+	function resetRenderState() {
+		// Metal does not inherit state between render encoders.
+		// Reset cached state so it gets re-applied on first draw.
+		currentDepthStencilState = null;
+		currentMaterialBits = -1;
+	}
+
 	function beginDefaultPass( r : Float, g : Float, b : Float, a : Float, depth : Float, stencil : Int ) {
 		MtlDrv.beginRenderPass(r, g, b, a, depth, stencil, defaultDepthTex);
 		inRenderPass = true;
 		passHasColor = true;
 		passHasDepth = true;
 		curColorFormat = cast PixelFormat.BGRA8Unorm;
-		// Set viewport on every new render encoder — Metal default viewport may not match attachment
+		resetRenderState();
 		MtlDrv.setViewport(0, 0, outputWidth, outputHeight, 0, 1);
 	}
 
@@ -1015,6 +1022,7 @@ class MetalDriver extends h3d.impl.Driver {
 		inRenderPass = true;
 		passHasColor = false;
 		passHasDepth = true;
+		resetRenderState();
 		// Track depth-only state so clear() can restart depth-only pass
 		curDepthOnlyTex = depthTex.res;
 		curDepthOnlyW = depthBuffer.width;
@@ -1046,6 +1054,7 @@ class MetalDriver extends h3d.impl.Driver {
 			inRenderPass = true;
 			passHasColor = false;
 			passHasDepth = true;
+			resetRenderState();
 			MtlDrv.setViewport(0, 0, curDepthOnlyW, curDepthOnlyH, 0, 1);
 		} else if( curTexture != null ) {
 			var hasDepth = curTexture.depthBuffer != null;
