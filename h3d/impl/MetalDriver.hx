@@ -138,7 +138,7 @@ class MetalDriver extends h3d.impl.Driver {
 		MtlDrv.create(layer, 800, 600, 0);
 		outputWidth = 800;
 		outputHeight = 600;
-		defaultDepthTex = MtlDrv.createTexture2D(800, 600, cast PixelFormat.Depth32Float, 1, 1, 0);
+		defaultDepthTex = MtlDrv.createTexture2D(800, 600, cast PixelFormat.Depth32Float, 1, cast(TextureUsage.RenderTarget | TextureUsage.ShaderRead), cast StorageMode.Private);
 		// Wrap onCreate to fix engine dimensions — hxd.Window returns 0 for Metal backend,
 		// causing Engine.onCreate to resize(0,0)→(32,32) which creates drawable/depth size mismatch
 		haxe.Timer.delay(function() {
@@ -155,10 +155,10 @@ class MetalDriver extends h3d.impl.Driver {
 		inRenderPass = false;
 		curTexture = null;
 		curDepthOnlyTex = null;
-		// Don't reset currentShader — the pipeline state must be re-set on
-		// each new render pass, but we need to remember which shader is active
-		// so selectMaterial() can create the correct pipeline.
-		// Reset material bits to force selectMaterial to re-set the pipeline.
+		// Reset currentShader so selectShader re-sets the pipeline on the
+		// new render encoder. Metal does not inherit pipeline state between
+		// render encoders, so the pipeline must always be re-set after a pass switch.
+		currentShader = null;
 		currentMaterialBits = -1;
 		// Begin default render pass with clear
 		beginDefaultPass(0, 0, 0, 0, 1.0, 0);
@@ -457,9 +457,11 @@ class MetalDriver extends h3d.impl.Driver {
 		if( s == currentShader )
 			return false;
 		currentShader = s;
-		// Create or get pipeline with correct color format for current render target
+		// Create or get pipeline with correct formats for current render pass
 		var blendDesc = new BlendDesc();
-		var cacheKey = s.shader.id + "_0_15_" + curColorFormat + "_" + (passHasDepth ? 1 : 0);
+		var pipeColorFmt = passHasColor ? curColorFormat : 0;
+		var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float : 0;
+		var cacheKey = s.shader.id + "_0_15_" + pipeColorFmt + "_" + (pipeDepthFmt > 0 ? 1 : 0);
 		var pipeline = pipelineCache.get(cacheKey);
 		if( pipeline == null ) {
 			var layout = buildVertexLayout(s);
@@ -468,8 +470,8 @@ class MetalDriver extends h3d.impl.Driver {
 				layout, layout.length,
 				s.format.strideBytes,
 				blendDesc,
-				curColorFormat,
-				passHasDepth ? cast PixelFormat.Depth32Float : 0
+				pipeColorFmt,
+				pipeDepthFmt
 			);
 			pipelineCache.set(cacheKey, pipeline);
 		}
@@ -683,33 +685,35 @@ class MetalDriver extends h3d.impl.Driver {
 
 		allowDraw = pass.culling != Both;
 
-		// Depth/stencil state
-		var depthBits = bits & (Pass.depthWrite_mask | Pass.depthTest_mask);
-		var stencilKey = depthBits | (stOpBits << 16) | (stMaskBits << 24);
-		var depthStencil = depthStencilStates.get(stencilKey);
-		if( depthStencil == null ) {
-			var cmp = Pass.getDepthTest(bits);
-			var depthWrite = Pass.getDepthWrite(bits) != 0;
-			var stencilCompare = st != null ? COMPARE[st.frontTest.getIndex()] : 0;
-			var stencilFailOp = st != null ? STENCIL_OP[st.frontSTfail.getIndex()] : metal.Format.StencilOperation.Keep;
-			var stencilDepthFailOp = st != null ? STENCIL_OP[st.frontDPfail.getIndex()] : metal.Format.StencilOperation.Keep;
-			var stencilPassOp = st != null ? STENCIL_OP[st.frontPass.getIndex()] : metal.Format.StencilOperation.Keep;
-			var readMask = st != null ? st.readMask : 0xFF;
-			var writeMask = st != null ? st.writeMask : 0xFF;
+		// Depth/stencil state — only when current render pass has a depth attachment
+		if( passHasDepth ) {
+			var depthBits = bits & (Pass.depthWrite_mask | Pass.depthTest_mask);
+			var stencilKey = depthBits | (stOpBits << 16) | (stMaskBits << 24);
+			var depthStencil = depthStencilStates.get(stencilKey);
+			if( depthStencil == null ) {
+				var cmp = Pass.getDepthTest(bits);
+				var depthWrite = Pass.getDepthWrite(bits) != 0;
+				var stencilCompare = st != null ? COMPARE[st.frontTest.getIndex()] : 0;
+				var stencilFailOp = st != null ? STENCIL_OP[st.frontSTfail.getIndex()] : metal.Format.StencilOperation.Keep;
+				var stencilDepthFailOp = st != null ? STENCIL_OP[st.frontDPfail.getIndex()] : metal.Format.StencilOperation.Keep;
+				var stencilPassOp = st != null ? STENCIL_OP[st.frontPass.getIndex()] : metal.Format.StencilOperation.Keep;
+				var readMask = st != null ? st.readMask : 0xFF;
+				var writeMask = st != null ? st.writeMask : 0xFF;
 
-			depthStencil = MtlDrv.createDepthStencilState(
-				cmp != 0 ? COMPARE[cmp] : metal.Format.CompareFunction.Always,
-				depthWrite,
-				stencilCompare, stencilFailOp, stencilDepthFailOp, stencilPassOp,
-				readMask, writeMask
-			);
-			depthStencilStates.set(stencilKey, depthStencil);
-		}
-		if( depthStencil != currentDepthStencilState || (st != null && st.reference != currentStencilRef) ) {
-			currentDepthStencilState = depthStencil;
-			currentStencilRef = st != null ? st.reference : 0;
-			MtlDrv.setDepthStencilState(depthStencil);
-			MtlDrv.setStencilRef(currentStencilRef);
+				depthStencil = MtlDrv.createDepthStencilState(
+					cmp != 0 ? COMPARE[cmp] : metal.Format.CompareFunction.Always,
+					depthWrite,
+					stencilCompare, stencilFailOp, stencilDepthFailOp, stencilPassOp,
+					readMask, writeMask
+				);
+				depthStencilStates.set(stencilKey, depthStencil);
+			}
+			if( depthStencil != currentDepthStencilState || (st != null && st.reference != currentStencilRef) ) {
+				currentDepthStencilState = depthStencil;
+				currentStencilRef = st != null ? st.reference : 0;
+				MtlDrv.setDepthStencilState(depthStencil);
+				MtlDrv.setStencilRef(currentStencilRef);
+			}
 		}
 
 		// Rebuild pipeline with blend state if shader is selected
@@ -723,11 +727,13 @@ class MetalDriver extends h3d.impl.Driver {
 			blendDesc.alphaBlendOperation = BLEND_OP[Pass.getBlendAlphaOp(bits)];
 			blendDesc.writeMask = mask & 15;
 
-			var cacheKey = currentShader.shader.id + "_" + bits + "_" + mask + "_" + curColorFormat + "_" + (passHasDepth ? 1 : 0);
+			var pipeColorFmt = passHasColor ? curColorFormat : 0;
+			var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float : 0;
+			var cacheKey = currentShader.shader.id + "_" + bits + "_" + mask + "_" + pipeColorFmt + "_" + (pipeDepthFmt > 0 ? 1 : 0);
 			var pipeline = pipelineCache.get(cacheKey);
 			if( pipeline == null ) {
 				var stride = currentShader.format.strideBytes;
-				pipeline = makePipelineWithBlend(currentShader, blendDesc, curColorFormat, passHasDepth ? cast PixelFormat.Depth32Float : 0, stride);
+				pipeline = makePipelineWithBlend(currentShader, blendDesc, pipeColorFmt, pipeDepthFmt, stride);
 				pipelineCache.set(cacheKey, pipeline);
 			}
 			MtlDrv.setRenderPipeline(pipeline);
@@ -923,6 +929,7 @@ class MetalDriver extends h3d.impl.Driver {
 		// Reset cached state so it gets re-applied on first draw.
 		currentDepthStencilState = null;
 		currentMaterialBits = -1;
+		currentShader = null;
 	}
 
 	function beginDefaultPass( r : Float, g : Float, b : Float, a : Float, depth : Float, stencil : Int ) {
@@ -1002,6 +1009,7 @@ class MetalDriver extends h3d.impl.Driver {
 		passHasColor = true;
 		passHasDepth = depthTex != null;
 		curColorFormat = getPixelFormat(tex);
+		resetRenderState();
 
 		var w = tex.width >> mipLevel; if( w == 0 ) w = 1;
 		var h = tex.height >> mipLevel; if( h == 0 ) h = 1;
@@ -1112,7 +1120,7 @@ class MetalDriver extends h3d.impl.Driver {
 			defaultDepthInst.t = allocDepthBuffer(defaultDepthInst);
 		}
 		// Recreate defaultDepthTex to match new drawable size
-		defaultDepthTex = MtlDrv.createTexture2D(width, height, cast PixelFormat.Depth32Float, 1, 1, 0);
+		defaultDepthTex = MtlDrv.createTexture2D(width, height, cast PixelFormat.Depth32Float, 1, cast(TextureUsage.RenderTarget | TextureUsage.ShaderRead), cast StorageMode.Private);
 		MtlDrv.setViewport(0, 0, width, height, 0, 1);
 	}
 
