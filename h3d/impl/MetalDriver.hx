@@ -469,7 +469,7 @@ class MetalDriver extends h3d.impl.Driver {
 				s.format.strideBytes,
 				blendDesc,
 				curColorFormat,
-				PixelFormat.Depth32Float
+				passHasDepth ? cast PixelFormat.Depth32Float : 0
 			);
 			pipelineCache.set(cacheKey, pipeline);
 		}
