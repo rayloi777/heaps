@@ -155,6 +155,7 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function dispose() {
+		MtlDrv.savePipelineArchive();
 		MtlDrv.disposeDriver(null);
 		if( metalWindow != null ) {
 			metal.Window.destroy(metalWindow);
@@ -170,6 +171,7 @@ class MetalDriver extends h3d.impl.Driver {
 		metalWindow = metal.Window.create("Heaps", 800, 600);
 		var layer = metal.Window.getMetalLayer(metalWindow);
 		MtlDrv.create(layer, 800, 600, 0);
+		MtlDrv.initPipelineArchive();
 		outputWidth = 800;
 		outputHeight = 600;
 		defaultDepthTex = MtlDrv.createTexture2D(800, 600, cast PixelFormat.Depth32Float, 1, cast(TextureUsage.RenderTarget | TextureUsage.ShaderRead), cast StorageMode.Private);
@@ -203,6 +205,7 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function present() {
+		if( frame % 60 == 0 ) MtlDrv.savePipelineArchive();
 		if( inRenderPass ) {
 			MtlDrv.endRenderPass();
 			inRenderPass = false;
@@ -213,6 +216,7 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function end() {
+		if( frame % 60 == 0 ) MtlDrv.savePipelineArchive();
 		if( inRenderPass ) {
 			MtlDrv.endRenderPass();
 			inRenderPass = false;
