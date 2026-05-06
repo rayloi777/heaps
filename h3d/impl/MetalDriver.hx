@@ -56,6 +56,7 @@ class MetalDriver extends h3d.impl.Driver {
 	var currentStencilOpBits : Int = -1;
 	var currentStencilMaskBits : Int = -1;
 	var currentStencilRef : Int = 0;
+	var currentCullMode : Int = -1;
 	var outputWidth : Int;
 	var outputHeight : Int;
 	var defaultDepthTex : metal.Driver.Texture;
@@ -685,6 +686,29 @@ class MetalDriver extends h3d.impl.Driver {
 
 		allowDraw = pass.culling != Both;
 
+		// Cull mode
+		var cull = pass.culling;
+		var cullInt = switch(cull) {
+			case None: 0;
+			case Back: 1;
+			case Front: 2;
+			case Both: 3;
+		}
+		if( cullInt != currentCullMode ) {
+			currentCullMode = cullInt;
+			if( cull == Both ) {
+				MtlDrv.setCullMode(metal.Format.CullMode.None); // draw skipped by allowDraw
+			} else {
+				MtlDrv.setCullMode(switch(cull) {
+					case None: metal.Format.CullMode.None;
+					case Front: metal.Format.CullMode.Front;
+					case Back: metal.Format.CullMode.Back;
+					case Both: metal.Format.CullMode.None;
+				});
+			}
+			MtlDrv.setFrontFacingWinding(metal.Format.Winding.CounterClockwise);
+		}
+
 		// Depth/stencil state — only when current render pass has a depth attachment
 		if( passHasDepth ) {
 			var depthBits = bits & (Pass.depthWrite_mask | Pass.depthTest_mask);
@@ -930,6 +954,7 @@ class MetalDriver extends h3d.impl.Driver {
 		currentDepthStencilState = null;
 		currentMaterialBits = -1;
 		currentShader = null;
+		currentCullMode = -1;
 	}
 
 	function beginDefaultPass( r : Float, g : Float, b : Float, a : Float, depth : Float, stencil : Int ) {
