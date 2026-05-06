@@ -753,7 +753,7 @@ class MetalDriver extends h3d.impl.Driver {
 					case Both: metal.Format.CullMode.None;
 				});
 			}
-			MtlDrv.setFrontFacingWinding(metal.Format.Winding.CounterClockwise);
+			MtlDrv.setFrontFacingWinding(metal.Format.Winding.Clockwise);
 		}
 
 		// Depth/stencil state — only when current render pass has a depth attachment
@@ -975,6 +975,7 @@ class MetalDriver extends h3d.impl.Driver {
 
 	override function draw( ibuf : h3d.Buffer, startIndex : Int, ntriangles : Int ) {
 		if( !allowDraw ) return;
+		if( ntriangles < 0 || ntriangles > 100000 ) return;
 		if( currentIndex != ibuf ) {
 			currentIndex = ibuf;
 		}

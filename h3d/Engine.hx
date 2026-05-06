@@ -196,7 +196,7 @@ class Engine {
 		if( indexes.isDisposed() )
 			return;
 		var maxTri = Std.int(indexes.count / 3);
-		if( drawTri < 0 ) drawTri = maxTri - startTri;
+		if( drawTri < 0 || drawTri > maxTri ) drawTri = maxTri - startTri;
 		if( drawTri > 0 && selectBuffer(b) ) {
 			// *3 because it's the position in indexes which are always by 3
 			driver.draw(indexes, startTri * 3, drawTri);
@@ -212,7 +212,7 @@ class Engine {
 		driver.selectMultiBuffers(format, buffers);
 		if( indexes.isDisposed() )
 			return;
-		if( drawTri < 0 ) drawTri = maxTri - startTri;
+		if( drawTri < 0 || drawTri > maxTri ) drawTri = maxTri - startTri;
 		if( drawTri > 0 ) {
 			// render
 			driver.draw(indexes, startTri * 3, drawTri);
