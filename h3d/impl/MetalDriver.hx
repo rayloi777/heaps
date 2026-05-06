@@ -96,9 +96,12 @@ class MetalDriver extends h3d.impl.Driver {
 	// Pipeline cache keyed by (shader.id, materialBits)
 	var pipelineCache : Map<Int, PipelineState>;
 
-	// Per-draw params buffer pool to avoid shared buffer overwrites between draws
-	var paramsPool : Array<{buf:Buffer, size:Int}>;
-	var paramsPoolIdx : Int;
+	// Per-draw params ring buffer — single large buffer sub-allocated per draw
+	var paramsRingBuffer : Buffer;
+	var paramsRingSize : Int;
+	var paramsRingOffset : Int;
+	static inline var PARAMS_RING_INITIAL = 1 << 20; // 1 MB
+	static inline var PARAMS_ALIGN = 256;
 	var curColorFormat : Int = cast PixelFormat.BGRA8Unorm;
 
 	var defaultDepthInst : h3d.mat.Texture;
@@ -136,8 +139,9 @@ class MetalDriver extends h3d.impl.Driver {
 		samplerStates = new Map();
 		pipelineCache = new Map();
 		currentDepthStencilState = null;
-		paramsPool = new Array();
-		paramsPoolIdx = 0;
+		paramsRingBuffer = null;
+		paramsRingSize = 0;
+		paramsRingOffset = 0;
 		inRenderPass = false;
 		curDepthOnlyTex = null;
 		curDepthOnlyW = 0;
@@ -177,7 +181,11 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function begin( frame : Int ) {
-		paramsPoolIdx = 0;
+		paramsRingOffset = 0;
+		if( paramsRingBuffer == null ) {
+			paramsRingSize = PARAMS_RING_INITIAL;
+			paramsRingBuffer = MtlDrv.createBuffer(paramsRingSize, ResourceOptions.StorageModeShared);
+		}
 		this.frame = frame;
 		MtlDrv.beginFrame();
 		inRenderPass = false;
@@ -829,26 +837,25 @@ class MetalDriver extends h3d.impl.Driver {
 			}
 		case Params:
 			if( shader.paramsSize > 0 && shader.params != null ) {
-				// Use per-draw buffer from pool to avoid overwriting params between draws
 				var bytes = shader.paramsSize << 4;
-				var pbuf;
-				if( paramsPoolIdx < paramsPool.length && paramsPool[paramsPoolIdx].size >= bytes ) {
-					pbuf = paramsPool[paramsPoolIdx].buf;
-				} else {
-					pbuf = MtlDrv.createBuffer(bytes, ResourceOptions.StorageModeShared);
-					if( paramsPoolIdx < paramsPool.length )
-						paramsPool[paramsPoolIdx] = { buf : pbuf, size : bytes };
-					else
-						paramsPool.push({ buf : pbuf, size : bytes });
+				// Align to 256 bytes for Metal buffer offset requirement
+				var offset = (paramsRingOffset + PARAMS_ALIGN - 1) & ~(PARAMS_ALIGN - 1);
+				if( offset + bytes > paramsRingSize ) {
+					// Grow ring buffer (double)
+					var newSize = paramsRingSize;
+					while( newSize < offset + bytes )
+						newSize = newSize * 2;
+					paramsRingSize = newSize;
+					paramsRingBuffer = MtlDrv.createBuffer(paramsRingSize, ResourceOptions.StorageModeShared);
 				}
-				paramsPoolIdx++;
 				var data = hl.Bytes.getArray(buffers.params.toData());
-				var contents = pbuf.contents();
-				contents.blit(0, data, 0, bytes);
+				var contents = paramsRingBuffer.contents();
+				contents.blit(offset, data, 0, bytes);
 				if( isVertex )
-					MtlDrv.setVertexBuffer(pbuf, 0, 1);
+					MtlDrv.setVertexBuffer(paramsRingBuffer, offset, 1);
 				else
-					MtlDrv.setFragmentBuffer(pbuf, 0, 1);
+					MtlDrv.setFragmentBuffer(paramsRingBuffer, offset, 1);
+				paramsRingOffset = offset + bytes;
 			}
 		case Textures:
 			for( i in 0...shader.texturesCount ) {
