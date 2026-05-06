@@ -58,6 +58,19 @@ class MetalDriver extends h3d.impl.Driver {
 	var currentStencilRef : Int = 0;
 	var currentCullMode : Int = -1;
 	var pipelineDirty : Bool = true;
+	// Texture/sampler binding cache
+	static inline var MAX_TEXTURES = 16;
+	var currentFragmentTextures : Array<metal.Driver.Texture>;
+	var currentFragmentSamplers : Array<metal.Driver.SamplerState>;
+	var currentVertexTextures : Array<metal.Driver.Texture>;
+	var currentVertexSamplers : Array<metal.Driver.SamplerState>;
+	// Viewport cache
+	var curVPX : Float = -1;
+	var curVPY : Float = -1;
+	var curVPW : Float = -1;
+	var curVPH : Float = -1;
+	var curVPZN : Float = -1;
+	var curVPZF : Float = -1;
 	var outputWidth : Int;
 	var outputHeight : Int;
 	var defaultDepthTex : metal.Driver.Texture;
@@ -120,6 +133,10 @@ class MetalDriver extends h3d.impl.Driver {
 		curDepthOnlyTex = null;
 		curDepthOnlyW = 0;
 		curDepthOnlyH = 0;
+		currentFragmentTextures = [for(i in 0...MAX_TEXTURES) null];
+		currentFragmentSamplers = [for(i in 0...MAX_TEXTURES) null];
+		currentVertexTextures = [for(i in 0...MAX_TEXTURES) null];
+		currentVertexSamplers = [for(i in 0...MAX_TEXTURES) null];
 	}
 
 	override function dispose() {
@@ -846,11 +863,16 @@ class MetalDriver extends h3d.impl.Driver {
 				t.lastFrame = frame;
 				if( t.t != null ) {
 					var tex = t.t.res;
-					if( isVertex )
-						MtlDrv.setVertexTexture(tex, i);
-					else {
-						MtlDrv.setFragmentTexture(tex, i);
-						// Also verify texture is valid by querying native
+					if( isVertex ) {
+						if( currentVertexTextures[i] != tex ) {
+							currentVertexTextures[i] = tex;
+							MtlDrv.setVertexTexture(tex, i);
+						}
+					} else {
+						if( currentFragmentTextures[i] != tex ) {
+							currentFragmentTextures[i] = tex;
+							MtlDrv.setFragmentTexture(tex, i);
+						}
 					}
 
 					// Sampler
@@ -878,10 +900,17 @@ class MetalDriver extends h3d.impl.Driver {
 							0, 1e30, t.anisotropicMaxLevel, 0);
 						samplerStates.set(samplerBits, sampler);
 					}
-					if( isVertex )
-						MtlDrv.setVertexSampler(sampler, i);
-					else
-						MtlDrv.setFragmentSampler(sampler, i);
+					if( isVertex ) {
+						if( currentVertexSamplers[i] != sampler ) {
+							currentVertexSamplers[i] = sampler;
+							MtlDrv.setVertexSampler(sampler, i);
+						}
+					} else {
+						if( currentFragmentSamplers[i] != sampler ) {
+							currentFragmentSamplers[i] = sampler;
+							MtlDrv.setFragmentSampler(sampler, i);
+						}
+					}
 				}
 			}
 		case Buffers:
@@ -962,6 +991,25 @@ class MetalDriver extends h3d.impl.Driver {
 		currentShader = null;
 		currentCullMode = -1;
 		pipelineDirty = true;
+		for( i in 0...MAX_TEXTURES ) {
+			currentFragmentTextures[i] = null;
+			currentFragmentSamplers[i] = null;
+			currentVertexTextures[i] = null;
+			currentVertexSamplers[i] = null;
+		}
+		curVPX = -1;
+		curVPY = -1;
+		curVPW = -1;
+		curVPH = -1;
+		curVPZN = -1;
+		curVPZF = -1;
+	}
+
+	function setViewportCached(x:Float, y:Float, w:Float, h:Float, zn:Float, zf:Float) {
+		if( x == curVPX && y == curVPY && w == curVPW && h == curVPH && zn == curVPZN && zf == curVPZF )
+			return;
+		curVPX = x; curVPY = y; curVPW = w; curVPH = h; curVPZN = zn; curVPZF = zf;
+		MtlDrv.setViewport(x, y, w, h, zn, zf);
 	}
 
 	function beginDefaultPass( r : Float, g : Float, b : Float, a : Float, depth : Float, stencil : Int ) {
@@ -971,7 +1019,7 @@ class MetalDriver extends h3d.impl.Driver {
 		passHasDepth = true;
 		curColorFormat = cast PixelFormat.BGRA8Unorm;
 		resetRenderState();
-		MtlDrv.setViewport(0, 0, outputWidth, outputHeight, 0, 1);
+		setViewportCached(0, 0, outputWidth, outputHeight, 0, 1);
 	}
 
 	var tmpTextures = new Array<h3d.mat.Texture>();
@@ -989,7 +1037,7 @@ class MetalDriver extends h3d.impl.Driver {
 				// Begin new default render pass for backbuffer
 				beginDefaultPass(0, 0, 0, 0, 1.0, 0);
 			}
-			MtlDrv.setViewport(0, 0, outputWidth, outputHeight, 0, 1);
+			setViewportCached(0, 0, outputWidth, outputHeight, 0, 1);
 			return;
 		}
 		tmpTextures[0] = tex;
@@ -1045,7 +1093,7 @@ class MetalDriver extends h3d.impl.Driver {
 
 		var w = tex.width >> mipLevel; if( w == 0 ) w = 1;
 		var h = tex.height >> mipLevel; if( h == 0 ) h = 1;
-		MtlDrv.setViewport(0, 0, w, h, 0, 1);
+		setViewportCached(0, 0, w, h, 0, 1);
 	}
 
 	override function setDepth( depthBuffer : Null<h3d.mat.Texture> ) {
@@ -1067,7 +1115,7 @@ class MetalDriver extends h3d.impl.Driver {
 		curDepthOnlyTex = depthTex.res;
 		curDepthOnlyW = depthBuffer.width;
 		curDepthOnlyH = depthBuffer.height;
-		MtlDrv.setViewport(0, 0, curDepthOnlyW, curDepthOnlyH, 0, 1);
+		setViewportCached(0, 0, curDepthOnlyW, curDepthOnlyH, 0, 1);
 	}
 
 	override function clear( ?color : h3d.Vector4, ?depth : Float, ?stencil : Int ) {
@@ -1095,7 +1143,7 @@ class MetalDriver extends h3d.impl.Driver {
 			passHasColor = false;
 			passHasDepth = true;
 			resetRenderState();
-			MtlDrv.setViewport(0, 0, curDepthOnlyW, curDepthOnlyH, 0, 1);
+			setViewportCached(0, 0, curDepthOnlyW, curDepthOnlyH, 0, 1);
 		} else if( curTexture != null ) {
 			var hasDepth = curTexture.depthBuffer != null;
 			var depthTex : Texture = hasDepth ? @:privateAccess curTexture.depthBuffer.t : null;
@@ -1153,7 +1201,7 @@ class MetalDriver extends h3d.impl.Driver {
 		}
 		// Recreate defaultDepthTex to match new drawable size
 		defaultDepthTex = MtlDrv.createTexture2D(width, height, cast PixelFormat.Depth32Float, 1, cast(TextureUsage.RenderTarget | TextureUsage.ShaderRead), cast StorageMode.Private);
-		MtlDrv.setViewport(0, 0, width, height, 0, 1);
+		setViewportCached(0, 0, width, height, 0, 1);
 	}
 
 	// ---- Misc ----
