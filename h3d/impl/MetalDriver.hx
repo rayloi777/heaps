@@ -94,7 +94,7 @@ class MetalDriver extends h3d.impl.Driver {
 	// Sampler state cache
 	var samplerStates : Map<Int, SamplerState>;
 	// Pipeline cache keyed by (shader.id, materialBits)
-	var pipelineCache : Map<String, PipelineState>;
+	var pipelineCache : Map<Int, PipelineState>;
 
 	// Per-draw params buffer pool to avoid shared buffer overwrites between draws
 	var paramsPool : Array<{buf:Buffer, size:Int}>;
@@ -105,6 +105,15 @@ class MetalDriver extends h3d.impl.Driver {
 
 	public function new() {
 		reset();
+	}
+
+	static function pipelineKey( shaderId : Int, bits : Int, mask : Int, colorFmt : Int, depthFmt : Int ) : Int {
+		var h = shaderId;
+		h = (h << 5) - h + bits;
+		h = (h << 5) - h + mask;
+		h = (h << 5) - h + colorFmt;
+		h = (h << 5) - h + (depthFmt > 0 ? 1 : 0);
+		return h;
 	}
 
 	function reset() {
@@ -491,7 +500,7 @@ class MetalDriver extends h3d.impl.Driver {
 		}
 		var pipeColorFmt = passHasColor ? curColorFormat : 0;
 		var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float : 0;
-		var cacheKey = s.shader.id + "_" + bits + "_" + mask + "_" + pipeColorFmt + "_" + (pipeDepthFmt > 0 ? 1 : 0);
+		var cacheKey = pipelineKey(s.shader.id, bits, mask, pipeColorFmt, pipeDepthFmt);
 		var pipeline = pipelineCache.get(cacheKey);
 		if( pipeline == null ) {
 			pipeline = makePipelineWithBlend(s, blendDesc, pipeColorFmt, pipeDepthFmt, s.format.strideBytes);
@@ -775,7 +784,7 @@ class MetalDriver extends h3d.impl.Driver {
 
 			var pipeColorFmt = passHasColor ? curColorFormat : 0;
 			var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float : 0;
-			var cacheKey = currentShader.shader.id + "_" + bits + "_" + mask + "_" + pipeColorFmt + "_" + (pipeDepthFmt > 0 ? 1 : 0);
+			var cacheKey = pipelineKey(currentShader.shader.id, bits, mask, pipeColorFmt, pipeDepthFmt);
 			var pipeline = pipelineCache.get(cacheKey);
 			if( pipeline == null ) {
 				var stride = currentShader.format.strideBytes;
