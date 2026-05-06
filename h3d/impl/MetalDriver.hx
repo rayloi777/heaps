@@ -57,6 +57,7 @@ class MetalDriver extends h3d.impl.Driver {
 	var currentStencilMaskBits : Int = -1;
 	var currentStencilRef : Int = 0;
 	var currentCullMode : Int = -1;
+	var pipelineDirty : Bool = true;
 	var outputWidth : Int;
 	var outputHeight : Int;
 	var defaultDepthTex : metal.Driver.Texture;
@@ -458,25 +459,29 @@ class MetalDriver extends h3d.impl.Driver {
 		if( s == currentShader )
 			return false;
 		currentShader = s;
-		// Create or get pipeline with correct formats for current render pass
+		pipelineDirty = true;
+		// Build pipeline with current material blend state (if material was selected)
+		var bits = currentMaterialBits;
+		var mask = 15; // default color mask when no material selected
 		var blendDesc = new BlendDesc();
+		if( bits >= 0 ) {
+			blendDesc.sourceRGBBlendFactor = BLEND[Pass.getBlendSrc(bits)];
+			blendDesc.destinationRGBBlendFactor = BLEND[Pass.getBlendDst(bits)];
+			blendDesc.rgbBlendOperation = BLEND_OP[Pass.getBlendOp(bits)];
+			blendDesc.sourceAlphaBlendFactor = BLEND[Pass.getBlendAlphaSrc(bits)];
+			blendDesc.destinationAlphaBlendFactor = BLEND[Pass.getBlendAlphaDst(bits)];
+			blendDesc.alphaBlendOperation = BLEND_OP[Pass.getBlendAlphaOp(bits)];
+		}
 		var pipeColorFmt = passHasColor ? curColorFormat : 0;
 		var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float : 0;
-		var cacheKey = s.shader.id + "_0_15_" + pipeColorFmt + "_" + (pipeDepthFmt > 0 ? 1 : 0);
+		var cacheKey = s.shader.id + "_" + bits + "_" + mask + "_" + pipeColorFmt + "_" + (pipeDepthFmt > 0 ? 1 : 0);
 		var pipeline = pipelineCache.get(cacheKey);
 		if( pipeline == null ) {
-			var layout = buildVertexLayout(s);
-			pipeline = MtlDrv.createRenderPipeline(
-				s.library, "vertex_main", "fragment_main",
-				layout, layout.length,
-				s.format.strideBytes,
-				blendDesc,
-				pipeColorFmt,
-				pipeDepthFmt
-			);
+			pipeline = makePipelineWithBlend(s, blendDesc, pipeColorFmt, pipeDepthFmt, s.format.strideBytes);
 			pipelineCache.set(cacheKey, pipeline);
 		}
 		MtlDrv.setRenderPipeline(pipeline);
+		pipelineDirty = false;
 		return true;
 	}
 
@@ -677,7 +682,7 @@ class MetalDriver extends h3d.impl.Driver {
 		var stOpBits = st != null ? @:privateAccess st.opBits : -1;
 		var stMaskBits = st != null ? @:privateAccess st.maskBits : -1;
 
-		if( bits == currentMaterialBits && stOpBits == currentStencilOpBits && stMaskBits == currentStencilMaskBits )
+		if( !pipelineDirty && bits == currentMaterialBits && stOpBits == currentStencilOpBits && stMaskBits == currentStencilMaskBits )
 			return;
 
 		currentMaterialBits = bits;
@@ -762,6 +767,7 @@ class MetalDriver extends h3d.impl.Driver {
 			}
 			MtlDrv.setRenderPipeline(pipeline);
 		}
+		pipelineDirty = false;
 	}
 
 	// ---- Shader Buffer Upload ----
@@ -955,6 +961,7 @@ class MetalDriver extends h3d.impl.Driver {
 		currentMaterialBits = -1;
 		currentShader = null;
 		currentCullMode = -1;
+		pipelineDirty = true;
 	}
 
 	function beginDefaultPass( r : Float, g : Float, b : Float, a : Float, depth : Float, stencil : Int ) {
