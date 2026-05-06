@@ -39,6 +39,7 @@ private class CompiledShader {
 	public var pipeline : PipelineState;
 	public var library : Library;
 	public var shader : hxsl.RuntimeShader;
+	public var layout : hl.NativeArray<LayoutElement>;
 	public function new() {
 	}
 }
@@ -416,7 +417,7 @@ class MetalDriver extends h3d.impl.Driver {
 		s.format = hxd.BufferFormat.make(format);
 
 		// Store vertex layout for later pipeline creation (color format varies per render target)
-		var layout = buildVertexLayout(s);
+		s.layout = buildVertexLayout(s);
 		return s;
 	}
 
@@ -463,7 +464,7 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	function makePipelineWithBlend( s : CompiledShader, blendDesc : BlendDesc, colorFormat : Int, depthFormat : Int, stride : Int ) : PipelineState {
-		var layout = buildVertexLayout(s);
+		var layout = s.layout;
 		return MtlDrv.createRenderPipeline(
 			s.library, "vertex_main", "fragment_main",
 			layout, layout.length,
