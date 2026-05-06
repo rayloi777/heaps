@@ -23,6 +23,7 @@ private class ShaderContext {
 	public var globals : Buffer;
 	public var params : Buffer;
 	public var paramsContent : hl.Bytes;
+	public var globalsPrevContent : hl.Bytes;
 	public var texturesTypes : Array<hxsl.Ast.Type>;
 	#if debug
 	public var debugSource : String;
@@ -273,6 +274,8 @@ class MetalDriver extends h3d.impl.Driver {
 		// Create constant buffers (Metal: Shared storage for CPU-write)
 		if( ctx.globalsSize > 0 )
 			ctx.globals = MtlDrv.createBuffer(ctx.globalsSize * 16, ResourceOptions.StorageModeShared);
+		if( ctx.globalsSize > 0 )
+			ctx.globalsPrevContent = new hl.Bytes(ctx.globalsSize * 16);
 		if( ctx.paramsSize > 0 ) {
 			ctx.params = MtlDrv.createBuffer(ctx.paramsSize * 16, ResourceOptions.StorageModeShared);
 			ctx.paramsContent = new hl.Bytes(ctx.paramsSize * 16);
@@ -830,7 +833,7 @@ class MetalDriver extends h3d.impl.Driver {
 		switch( which ) {
 		case Globals:
 			if( shader.globalsSize > 0 && shader.globals != null ) {
-				uploadShaderBuffer(shader.globals, buffers.globals, shader.globalsSize, null);
+				uploadShaderBuffer(shader.globals, buffers.globals, shader.globalsSize, shader.globalsPrevContent);
 				if( isVertex )
 					MtlDrv.setVertexBuffer(shader.globals, 0, 0);
 				else
