@@ -105,6 +105,9 @@ class MetalDriver extends h3d.impl.Driver {
 	static inline var PARAMS_RING_INITIAL = 1 << 20; // 1 MB
 	static inline var PARAMS_ALIGN = 256;
 	var curColorFormat : Int = cast PixelFormat.BGRA8Unorm;
+	var curColorFormats : Array<Int> = [];
+	var isMRT : Bool = false;
+	var curMRTTextures : hl.NativeArray<metal.Driver.Texture> = null;
 
 	var defaultDepthInst : h3d.mat.Texture;
 
@@ -174,7 +177,7 @@ class MetalDriver extends h3d.impl.Driver {
 		MtlDrv.initPipelineArchive();
 		outputWidth = 800;
 		outputHeight = 600;
-		defaultDepthTex = MtlDrv.createTexture2D(800, 600, cast PixelFormat.Depth32Float, 1, cast(TextureUsage.RenderTarget | TextureUsage.ShaderRead), cast StorageMode.Private);
+		defaultDepthTex = MtlDrv.createTexture2D(800, 600, cast PixelFormat.Depth32Float_Stencil8, 1, cast(TextureUsage.RenderTarget | TextureUsage.ShaderRead), cast StorageMode.Private);
 		// Wrap onCreate to fix engine dimensions — hxd.Window returns 0 for Metal backend,
 		// causing Engine.onCreate to resize(0,0)→(32,32) which creates drawable/depth size mismatch
 		haxe.Timer.delay(function() {
@@ -482,6 +485,24 @@ class MetalDriver extends h3d.impl.Driver {
 		);
 	}
 
+	function makePipelineMRT( s : CompiledShader, blendDesc : BlendDesc, colorFormats : Array<Int>, depthFormat : Int, stride : Int ) : PipelineState {
+		var layout = s.layout;
+		var fmtArr = new hl.NativeArray<Int>(colorFormats.length);
+		var blendArr = new hl.NativeArray<BlendDesc>(colorFormats.length);
+		for( i in 0...colorFormats.length ) {
+			fmtArr[i] = colorFormats[i];
+			blendArr[i] = blendDesc;
+		}
+		return MtlDrv.createRenderPipelineMRT(
+			s.library, "vertex_main", "fragment_main",
+			layout, layout.length,
+			stride,
+			blendArr, colorFormats.length,
+			fmtArr, colorFormats.length,
+			depthFormat
+		);
+	}
+
 	override function getNativeShaderCode( shader : hxsl.RuntimeShader ) : String {
 		var vsCode = shader.vertex.code;
 		if( vsCode == null )
@@ -514,14 +535,26 @@ class MetalDriver extends h3d.impl.Driver {
 			blendDesc.destinationAlphaBlendFactor = BLEND[Pass.getBlendAlphaDst(bits)];
 			blendDesc.alphaBlendOperation = BLEND_OP[Pass.getBlendAlphaOp(bits)];
 		}
-		var pipeColorFmt = passHasColor ? curColorFormat : 0;
-		var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float : 0;
-		var cacheKey = pipelineKey(s.shader.id, bits, mask, pipeColorFmt, pipeDepthFmt);
-		var pipeline = pipelineCache.get(cacheKey);
-		if( pipeline == null ) {
-			pipeline = makePipelineWithBlend(s, blendDesc, pipeColorFmt, pipeDepthFmt, s.format.strideBytes);
-			pipelineCache.set(cacheKey, pipeline);
-		}
+			var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float_Stencil8 : 0;
+			var pipeline : PipelineState;
+			if( isMRT && curColorFormats.length > 1 ) {
+				var mrtKey = s.shader.id * 1000003 + bits * 31 + mask;
+				for( f in curColorFormats ) mrtKey = mrtKey * 31 + f;
+				if( pipeDepthFmt > 0 ) mrtKey = mrtKey * 31 + 1;
+				pipeline = pipelineCache.get(mrtKey);
+				if( pipeline == null ) {
+					pipeline = makePipelineMRT(s, blendDesc, curColorFormats, pipeDepthFmt, s.format.strideBytes);
+					pipelineCache.set(mrtKey, pipeline);
+				}
+			} else {
+				var pipeColorFmt = passHasColor ? curColorFormat : 0;
+				var cacheKey = pipelineKey(s.shader.id, bits, mask, pipeColorFmt, pipeDepthFmt);
+				pipeline = pipelineCache.get(cacheKey);
+				if( pipeline == null ) {
+					pipeline = makePipelineWithBlend(s, blendDesc, pipeColorFmt, pipeDepthFmt, s.format.strideBytes);
+					pipelineCache.set(cacheKey, pipeline);
+				}
+			}
 		MtlDrv.setRenderPipeline(pipeline);
 		pipelineDirty = false;
 		return true;
@@ -604,10 +637,16 @@ class MetalDriver extends h3d.impl.Driver {
 			usage = usage | TextureUsage.RenderTarget;
 
 		var pixelFormat = getPixelFormat(t);
+		// Upgrade depth-only to depth+stencil for consistent pipeline state
+		if( pixelFormat == PixelFormat.Depth32Float )
+			pixelFormat = PixelFormat.Depth32Float_Stencil8;
 		// Use Shared storage for non-RT textures so CPU can upload directly.
 		// Private storage requires blit encoder which can have sync issues.
 		var storage = rt ? StorageMode.Private : StorageMode.Shared;
-		var tex = MtlDrv.createTexture2D(t.width, t.height, pixelFormat, mips, cast usage, storage);
+		var isCube = t.flags.has(Cube);
+		var tex = isCube
+			? MtlDrv.createTextureCube(t.width, pixelFormat, mips, cast usage, storage)
+			: MtlDrv.createTexture2D(t.width, t.height, pixelFormat, mips, cast usage, storage);
 		if( tex == null )
 			return null;
 
@@ -636,12 +675,12 @@ class MetalDriver extends h3d.impl.Driver {
 		var tex = t.t;
 		if( tex == null ) return;
 		MtlDrv.textureReplaceRegion(tex.res, mipLevel, 0, 0, pixels.width, pixels.height,
-			@:privateAccess (pixels.bytes : hl.Bytes).offset(pixels.offset), stride);
+			@:privateAccess (pixels.bytes : hl.Bytes).offset(pixels.offset), stride, side);
 		t.flags.set(WasCleared);
 	}
 
 	override function allocDepthBuffer( b : h3d.mat.Texture ) : Texture {
-		var pixelFormat = PixelFormat.Depth32Float;
+		var pixelFormat = PixelFormat.Depth32Float_Stencil8;
 		var usage : TextureUsage = TextureUsage.RenderTarget | TextureUsage.ShaderRead;
 		var tex = MtlDrv.createTexture2D(b.width, b.height, pixelFormat, 1, cast usage, StorageMode.Private);
 		if( tex == null )
@@ -798,14 +837,25 @@ class MetalDriver extends h3d.impl.Driver {
 			blendDesc.alphaBlendOperation = BLEND_OP[Pass.getBlendAlphaOp(bits)];
 			blendDesc.writeMask = mask & 15;
 
-			var pipeColorFmt = passHasColor ? curColorFormat : 0;
-			var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float : 0;
-			var cacheKey = pipelineKey(currentShader.shader.id, bits, mask, pipeColorFmt, pipeDepthFmt);
-			var pipeline = pipelineCache.get(cacheKey);
-			if( pipeline == null ) {
-				var stride = currentShader.format.strideBytes;
-				pipeline = makePipelineWithBlend(currentShader, blendDesc, pipeColorFmt, pipeDepthFmt, stride);
-				pipelineCache.set(cacheKey, pipeline);
+			var pipeDepthFmt = passHasDepth ? cast PixelFormat.Depth32Float_Stencil8 : 0;
+			var pipeline : PipelineState;
+			if( isMRT && curColorFormats.length > 1 ) {
+				var mrtKey = currentShader.shader.id * 1000003 + bits * 31 + (mask & 15);
+				for( f in curColorFormats ) mrtKey = mrtKey * 31 + f;
+				if( pipeDepthFmt > 0 ) mrtKey = mrtKey * 31 + 1;
+				pipeline = pipelineCache.get(mrtKey);
+				if( pipeline == null ) {
+					pipeline = makePipelineMRT(currentShader, blendDesc, curColorFormats, pipeDepthFmt, currentShader.format.strideBytes);
+					pipelineCache.set(mrtKey, pipeline);
+				}
+			} else {
+				var pipeColorFmt = passHasColor ? curColorFormat : 0;
+				var cacheKey = pipelineKey(currentShader.shader.id, bits, mask, pipeColorFmt, pipeDepthFmt);
+				pipeline = pipelineCache.get(cacheKey);
+				if( pipeline == null ) {
+					pipeline = makePipelineWithBlend(currentShader, blendDesc, pipeColorFmt, pipeDepthFmt, currentShader.format.strideBytes);
+					pipelineCache.set(cacheKey, pipeline);
+				}
 			}
 			MtlDrv.setRenderPipeline(pipeline);
 		}
@@ -1059,6 +1109,8 @@ class MetalDriver extends h3d.impl.Driver {
 				}
 				curTexture = null;
 				curDepthOnlyTex = null;
+					isMRT = false;
+					curMRTTextures = null;
 				// Begin new default render pass for backbuffer
 				beginDefaultPass(0, 0, 0, 0, 1.0, 0);
 			}
@@ -1081,6 +1133,8 @@ class MetalDriver extends h3d.impl.Driver {
 
 		var tex = textures[0];
 		curTexture = tex;
+		// Clear depth-only state when switching to color target
+		curDepthOnlyTex = null;
 
 		// End current render pass if any
 		if( inRenderPass ) {
@@ -1094,22 +1148,43 @@ class MetalDriver extends h3d.impl.Driver {
 			t.lastFrame = frame;
 		}
 
-		// Begin new render pass targeting the first texture
-		// For now, use beginRenderPass with clear values (will be overridden by clear())
 		var hasDepth = tex.depthBuffer != null;
-		var depthTex : Texture = null;
-		if( hasDepth ) {
-			depthTex = @:privateAccess tex.depthBuffer.t;
-		}
+			var depthTex : Texture = null;
+			if( hasDepth ) {
+				depthTex = @:privateAccess tex.depthBuffer.t;
+			}
 
-		// Use the extended render pass API for render-to-texture
-		MtlDrv.beginRenderPassEx(
-			tex.t.res, LoadAction.Clear, StoreAction.Store,
-			0, 0, 0, 0,
-			depthTex != null ? depthTex.res : null,
-			LoadAction.Clear, StoreAction.Store,
-			1.0
-		);
+			if( textures.length > 1 ) {
+				// MRT: multiple color attachments
+				var nativeArr = new hl.NativeArray<metal.Driver.Texture>(textures.length);
+				curColorFormats = [];
+				for( i in 0...textures.length ) {
+					nativeArr[i] = textures[i].t.res;
+					curColorFormats.push(getPixelFormat(textures[i]));
+				}
+				isMRT = true;
+				curMRTTextures = nativeArr;
+				MtlDrv.beginRenderPassMRT(
+					nativeArr, textures.length,
+					LoadAction.Clear, StoreAction.Store,
+					0, 0, 0, 0,
+					depthTex != null ? depthTex.res : null,
+					LoadAction.Clear, StoreAction.Store,
+					1.0
+				);
+			} else {
+				// Single render target
+				isMRT = false;
+				curMRTTextures = null;
+				curColorFormats = [getPixelFormat(tex)];
+				MtlDrv.beginRenderPassEx(
+					tex.t.res, LoadAction.Clear, StoreAction.Store,
+					0, 0, 0, 0,
+					depthTex != null ? depthTex.res : null,
+					LoadAction.Clear, StoreAction.Store,
+					1.0
+				);
+			}
 		inRenderPass = true;
 		passHasColor = true;
 		passHasDepth = depthTex != null;
@@ -1169,6 +1244,22 @@ class MetalDriver extends h3d.impl.Driver {
 			passHasDepth = true;
 			resetRenderState();
 			setViewportCached(0, 0, curDepthOnlyW, curDepthOnlyH, 0, 1);
+		} else if( isMRT && curMRTTextures != null ) {
+			// MRT clear: restart pass with all color attachments
+			var hasDepth = curTexture.depthBuffer != null;
+			var depthTex : Texture = hasDepth ? @:privateAccess curTexture.depthBuffer.t : null;
+			MtlDrv.beginRenderPassMRT(
+				curMRTTextures, curColorFormats.length,
+				LoadAction.Clear, StoreAction.Store,
+				cr, cg, cb, ca,
+				depthTex != null ? depthTex.res : null,
+				depth != null || stencil != null ? LoadAction.Clear : LoadAction.DontCare,
+				StoreAction.Store,
+				d
+			);
+			inRenderPass = true;
+			passHasColor = true;
+			passHasDepth = depthTex != null;
 		} else if( curTexture != null ) {
 			var hasDepth = curTexture.depthBuffer != null;
 			var depthTex : Texture = hasDepth ? @:privateAccess curTexture.depthBuffer.t : null;
@@ -1225,7 +1316,7 @@ class MetalDriver extends h3d.impl.Driver {
 			defaultDepthInst.t = allocDepthBuffer(defaultDepthInst);
 		}
 		// Recreate defaultDepthTex to match new drawable size
-		defaultDepthTex = MtlDrv.createTexture2D(width, height, cast PixelFormat.Depth32Float, 1, cast(TextureUsage.RenderTarget | TextureUsage.ShaderRead), cast StorageMode.Private);
+		defaultDepthTex = MtlDrv.createTexture2D(width, height, cast PixelFormat.Depth32Float_Stencil8, 1, cast(TextureUsage.RenderTarget | TextureUsage.ShaderRead), cast StorageMode.Private);
 		setViewportCached(0, 0, width, height, 0, 1);
 	}
 
