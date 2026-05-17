@@ -9,8 +9,8 @@ class Blur extends ScreenShader {
 		@param var depthTexture : Sampler2D;
 		@param @const var Quality : Int;
 		@param @const var isDepth : Bool;
-		@param var values : Array<Float,Quality>;
-		@param var offsets : Array<Float,Quality>;
+		@param var values : Vec4;
+		@param var offsets : Vec4;
 		@param var pixel : Vec2;
 
 		@const var hasFixedColor : Bool;
@@ -30,6 +30,14 @@ class Blur extends ScreenShader {
 			if ( depthThresholdMaxDist > 0.0 )
 				t *= 1.0 + max(z - depthThresholdMaxDist, 0.0);
 			return t;
+		}
+
+		// Helper: select Vec4 component by index (replaces array access)
+		function getV( idx : Int ) : Float {
+			return idx == 0 ? values.x : idx == 1 ? values.y : idx == 2 ? values.z : values.w;
+		}
+		function getO( idx : Int ) : Float {
+			return idx == 0 ? offsets.x : idx == 1 ? offsets.y : idx == 2 ? offsets.z : offsets.w;
 		}
 
 		function fragment() {
@@ -54,29 +62,29 @@ class Blur extends ScreenShader {
 				}
 
 				@unroll for( i in -Quality + 1...Quality ) {
-					var curCoord = floor(coord + ( pixel * dimensions ) * offsets[i < 0 ? -i : i] * i) + vec2(0.5);
+					var curCoord = floor(coord + ( pixel * dimensions ) * getO(i < 0 ? -i : i) * i) + vec2(0.5);
 					var nearestUV = curCoord * invDimensions;
-					var uv = fragUV + pixel * offsets[i < 0 ? -i : i] * i;
+					var uv = fragUV + pixel * getO(i < 0 ? -i : i) * i;
 					var ccur = texture.get( ( isEdge ) ? nearestUV : uv );
 					var pcur = getViewPosition(nearestUV);
 					var d = abs(pcur.z - p.z);
 					c = ( d > scaleThreshold(min(pcur.z, p.z)) ) ? c : ccur;
-					color += c * values[i < 0 ? -i : i];
+					color += c * getV(i < 0 ? -i : i);
 				}
 				pixelColor = color;
 			}
 			else if( isDepth ) {
 				var val = 0.;
 				@unroll for( i in -Quality + 1...Quality ){
-					if( isCube ) val += unpack(cubeTexture.get(vec3((input.uv + pixel * offsets[i < 0 ? -i : i] * i )* 2.0 - 1.0, 1) * cubeDir)) * values[i < 0 ? -i : i];
-					else val += unpack(texture.get(input.uv + pixel * offsets[i < 0 ? -i : i] * i)) * values[i < 0 ? -i : i];
+					if( isCube ) val += unpack(cubeTexture.get(vec3((input.uv + pixel * getO(i < 0 ? -i : i) * i )* 2.0 - 1.0, 1) * cubeDir)) * getV(i < 0 ? -i : i);
+					else val += unpack(texture.get(input.uv + pixel * getO(i < 0 ? -i : i) * i)) * getV(i < 0 ? -i : i);
 				}
 				pixelColor = pack(val.min(0.9999999));
 			} else {
 				var color = vec4(0, 0, 0, 0);
 				@unroll for( i in -Quality + 1...Quality ){
-					if( isCube ) color += cubeTexture.get(vec3((input.uv + pixel * offsets[i < 0 ? -i : i] * i )* 2.0 - 1.0, 1) * cubeDir) * values[i < 0 ? -i : i];
-					else color += texture.get(input.uv + pixel * offsets[i < 0 ? -i : i] * i) * values[i < 0 ? -i : i];
+					if( isCube ) color += cubeTexture.get(vec3((input.uv + pixel * getO(i < 0 ? -i : i) * float(i) )* 2.0 - 1.0, 1) * cubeDir) * getV(i < 0 ? -i : i);
+					else color += texture.get(input.uv + pixel * getO(i < 0 ? -i : i) * float(i)) * getV(i < 0 ? -i : i);
 				}
 				pixelColor = color;
 			}

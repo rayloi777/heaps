@@ -140,8 +140,8 @@ class Blur extends ScreenFx<h3d.shader.Blur> {
 		var tmp = ctx.textures.allocTarget(src.name+"BlurTmp", src.width, src.height, false, src.format, isCube ? [Cube] : null);
 
 		shader.Quality = values.length;
-		shader.values = values;
-		shader.offsets = offsets;
+		shader.values = new h3d.Vector4(values[0], values.length > 1 ? values[1] : 0, values.length > 2 ? values[2] : 0, values.length > 3 ? values[3] : 0);
+		shader.offsets = new h3d.Vector4(offsets[0], offsets.length > 1 ? offsets[1] : 0, offsets.length > 2 ? offsets[2] : 0, offsets.length > 3 ? offsets[3] : 0);
 
 		if( isCube ) {
 			shader.cubeTexture = src;
