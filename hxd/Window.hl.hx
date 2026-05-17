@@ -234,8 +234,6 @@ class Window {
 		if (mouseMode == Absolute) window.setCursorPosition(x, y);
 		#elseif hlsdl
 		if (mouseMode == Absolute) window.warpMouse(x, y);
-		#else
-		throw "Not implemented";
 		#end
 		curMouseX = x;
 		curMouseY = y;
@@ -296,7 +294,6 @@ class Window {
 		#elseif hlsdl
 		return window.grab = v;
 		#else
-		if( v ) throw "Not implemented";
 		return false;
 		#end
 	}
@@ -312,8 +309,6 @@ class Window {
 		return mouseMode = v;
 		#elseif hlsdl
 		sdl.Sdl.setRelativeMouseMode(v != Absolute);
-		#else
-		if ( v != Absolute ) throw "Not implemented";
 		#end
 
 		if ( v == Absolute ) {
