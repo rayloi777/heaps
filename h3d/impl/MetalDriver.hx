@@ -817,7 +817,7 @@ class MetalDriver extends h3d.impl.Driver {
 
 			depthStencil = MtlDrv.createDepthStencilState(
 				cmp != 0 ? COMPARE[cmp] : metal.Format.CompareFunction.Always,
-				depthWrite ? 1 : 0,
+				depthWrite,
 				stencilCompare, stencilFailOp, stencilDepthFailOp, stencilPassOp,
 				readMask, writeMask
 			);
