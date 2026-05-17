@@ -128,8 +128,8 @@ class System {
 		@:privateAccess Window.inst = createWindow();
 
 		#if hlmetal
-		metal.Window.setEventCallback(@:privateAccess hxd.Window.onMetalEvent);
-		#end
+			@:privateAccess Window.initMacKeys();
+			#end
 
 		init();
 		#end

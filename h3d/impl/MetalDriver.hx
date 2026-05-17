@@ -234,8 +234,6 @@ class MetalDriver extends h3d.impl.Driver {
 			inRenderPass = false;
 		}
 		MtlDrv.present();
-		if( metalWindow != null )
-			metal.Window.pollEvents(metalWindow);
 	}
 
 	override function getDriverName( details : Bool ) {

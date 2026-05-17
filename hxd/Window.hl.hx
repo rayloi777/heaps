@@ -356,7 +356,88 @@ class Window {
 			return true;
 		}
 
-	#elseif hlmetal
+		#elseif hlmetal
+
+		static var MAC_KEYMAP = [for( i in 0...128 ) i];
+
+		static function initMacKeys() {
+			var k = hxd.Key;
+			inline function addKey(mac, keyCode) {
+				if( mac < 128 ) MAC_KEYMAP[mac] = keyCode;
+			}
+			// Letters (macOS virtual key codes -> hxd.Key ASCII codes)
+			addKey(0x00, k.A); addKey(0x01, k.S); addKey(0x02, k.D); addKey(0x03, k.F);
+			addKey(0x04, k.H); addKey(0x05, k.G); addKey(0x06, k.Z); addKey(0x07, k.X);
+			addKey(0x08, k.C); addKey(0x09, k.V); addKey(0x0B, k.B); addKey(0x0C, k.Q);
+			addKey(0x0D, k.W); addKey(0x0E, k.E); addKey(0x0F, k.R); addKey(0x10, k.Y);
+			addKey(0x11, k.T); addKey(0x1F, k.O); addKey(0x20, k.U); addKey(0x22, k.I);
+			addKey(0x23, k.P); addKey(0x25, k.L); addKey(0x26, k.J); addKey(0x28, k.K);
+			addKey(0x2D, k.N); addKey(0x2E, k.M);
+			// Number row
+			addKey(0x12, k.NUMBER_1); addKey(0x13, k.NUMBER_2); addKey(0x14, k.NUMBER_3);
+			addKey(0x15, k.NUMBER_4); addKey(0x17, k.NUMBER_5); addKey(0x16, k.NUMBER_6);
+			addKey(0x1A, k.NUMBER_7); addKey(0x1C, k.NUMBER_8); addKey(0x19, k.NUMBER_9);
+			addKey(0x1D, k.NUMBER_0);
+			// Special keys
+			addKey(0x24, k.ENTER);     // kVK_Return
+			addKey(0x30, k.TAB);       // kVK_Tab
+			addKey(0x31, k.SPACE);     // kVK_Space
+			addKey(0x33, k.BACKSPACE); // kVK_Delete (backspace)
+			addKey(0x35, k.ESCAPE);    // kVK_Escape
+			addKey(0x75, k.DELETE);    // kVK_ForwardDelete
+			// Modifiers
+			addKey(0x38, k.LSHIFT);    // kVK_Shift
+			addKey(0x3C, k.RSHIFT);    // kVK_RightShift
+			addKey(0x3B, k.LCTRL);     // kVK_Control
+			addKey(0x3E, k.RCTRL);     // kVK_RightControl
+			addKey(0x3A, k.LALT);      // kVK_Option
+			addKey(0x3D, k.RALT);      // kVK_RightOption
+			addKey(0x37, k.LEFT_WINDOW_KEY);  // kVK_Command
+			addKey(0x36, k.RIGHT_WINDOW_KEY); // kVK_RightCommand
+			// Navigation
+			addKey(0x7E, k.UP);    // kVK_UpArrow
+			addKey(0x7D, k.DOWN);  // kVK_DownArrow
+			addKey(0x7B, k.LEFT);  // kVK_LeftArrow
+			addKey(0x7C, k.RIGHT); // kVK_RightArrow
+			addKey(0x73, k.HOME);  // kVK_Home
+			addKey(0x77, k.END);   // kVK_End
+			addKey(0x74, k.PGUP);  // kVK_PageUp
+			addKey(0x79, k.PGDOWN);// kVK_PageDown
+			// F keys
+			addKey(0x7A, k.F1);  addKey(0x78, k.F2);  addKey(0x63, k.F3);  addKey(0x76, k.F4);
+			addKey(0x60, k.F5);  addKey(0x61, k.F6);  addKey(0x62, k.F7);  addKey(0x64, k.F8);
+			addKey(0x65, k.F9);  addKey(0x6D, k.F10); addKey(0x67, k.F11); addKey(0x6F, k.F12);
+			// Numpad
+			addKey(0x52, k.NUMPAD_0); addKey(0x53, k.NUMPAD_1); addKey(0x54, k.NUMPAD_2);
+			addKey(0x55, k.NUMPAD_3); addKey(0x56, k.NUMPAD_4); addKey(0x57, k.NUMPAD_5);
+			addKey(0x58, k.NUMPAD_6); addKey(0x59, k.NUMPAD_7); addKey(0x5B, k.NUMPAD_8);
+			addKey(0x5C, k.NUMPAD_9);
+			addKey(0x4B, k.NUMPAD_DIV);   // kVK_ANSI_KeypadDivide
+			addKey(0x43, k.NUMPAD_MULT);  // kVK_ANSI_KeypadMultiply
+			addKey(0x4E, k.NUMPAD_SUB);   // kVK_ANSI_KeypadMinus
+			addKey(0x45, k.NUMPAD_ADD);   // kVK_ANSI_KeypadPlus
+			addKey(0x4C, k.NUMPAD_ENTER); // kVK_ANSI_KeypadEnter
+			addKey(0x41, k.NUMPAD_DOT);   // kVK_ANSI_KeypadDecimal
+			// Punctuation
+			addKey(0x18, k.QWERTY_EQUALS);        // kVK_ANSI_Equal
+			addKey(0x1B, k.QWERTY_MINUS);         // kVK_ANSI_Minus
+			addKey(0x21, k.QWERTY_BRACKET_LEFT);  // kVK_ANSI_LeftBracket
+			addKey(0x1E, k.QWERTY_BRACKET_RIGHT); // kVK_ANSI_RightBracket
+			addKey(0x2A, k.QWERTY_BACKSLASH);     // kVK_ANSI_Backslash
+			addKey(0x27, k.QWERTY_QUOTE);         // kVK_ANSI_Quote
+			addKey(0x2B, k.QWERTY_COMMA);         // kVK_ANSI_Comma
+			addKey(0x2F, k.QWERTY_PERIOD);        // kVK_ANSI_Period
+			addKey(0x2C, k.QWERTY_SLASH);         // kVK_ANSI_Slash
+			addKey(0x29, k.QWERTY_SEMICOLON);     // kVK_ANSI_Semicolon
+			addKey(0x0A, k.INTL_BACKSLASH);       // kVK_ISO_Section
+			addKey(0x32, k.QWERTY_TILDE);         // kVK_ANSI_Grave
+			// Lock / misc
+			addKey(0x39, k.CAPS_LOCK);   // kVK_CapsLock
+			addKey(0x47, k.NUM_LOCK);    // kVK_ANSI_KeypadClear
+			addKey(0x71, k.SCROLL_LOCK); // kVK_F15 (used as ScrollLock)
+			addKey(0x6A, k.PAUSE_BREAK); // kVK_F16 (used as Pause/Break)
+			addKey(0x6E, k.CONTEXT_MENU);// kVK_ContextualMenu
+		}
 
 		function get_vsync() : Bool return true;
 
@@ -366,54 +447,56 @@ class Window {
 
 		function get_isFocused() : Bool return true;
 
-		static var metalEventQueue : Array<{ type:Int, mouseX:Int, mouseY:Int, button:Int, wheelDelta:Float, keyCode:Int, scanCode:Int }> = [];
-
-		static function onMetalEvent( type:Int, mouseX:Int, mouseY:Int, button:Int, wheelDelta:Float, keyCode:Int, scanCode:Int ) : Void {
-			metalEventQueue.push({ type: type, mouseX: mouseX, mouseY: mouseY, button: button, wheelDelta: wheelDelta, keyCode: keyCode, scanCode: scanCode });
-		}
-
 		static function processMetalEvents() : Void {
-			var q = metalEventQueue;
-			metalEventQueue = [];
-			trace("processMetalEvents: " + q.length + " events, inst=" + (inst != null) + ", targets=" + (inst != null ? inst.eventTargets.length : -1));
 			var w = inst;
 			if( w == null ) return;
-			for( e in q ) {
+			var count = metal.Window.eventCount();
+			for( i in 0...count ) {
+				var etype = metal.Window.eventType(i);
+				var mx = metal.Window.eventMouseX(i);
+				var my = metal.Window.eventMouseY(i);
+				var btn = metal.Window.eventButton(i);
+				var wheel = metal.Window.eventWheel(i);
+				var kc = metal.Window.eventKeyCode(i);
+				var sc = metal.Window.eventScanCode(i);
 				var eh : Event = null;
-				switch( e.type ) {
+				switch( etype ) {
+				case 5: // Quit
+					if( w.onClose() )
+						w.close();
 				case 8: // MouseDown
-					w.curMouseX = e.mouseX;
-					w.curMouseY = e.mouseY;
-					eh = new Event(EPush, e.mouseX, e.mouseY);
-					eh.button = switch( e.button ) {
+					w.curMouseX = mx;
+					w.curMouseY = my;
+					eh = new Event(EPush, mx, my);
+					eh.button = switch( btn ) {
 					case 0: 0;
 					case 1: 2;
 					case 2: 1;
 					case x: x;
 					}
 				case 9: // MouseUp
-					w.curMouseX = e.mouseX;
-					w.curMouseY = e.mouseY;
-					eh = new Event(ERelease, e.mouseX, e.mouseY);
-					eh.button = switch( e.button ) {
+					w.curMouseX = mx;
+					w.curMouseY = my;
+					eh = new Event(ERelease, mx, my);
+					eh.button = switch( btn ) {
 					case 0: 0;
 					case 1: 2;
 					case 2: 1;
 					case x: x;
 					}
 				case 10: // MouseMove
-					w.curMouseX = e.mouseX;
-					w.curMouseY = e.mouseY;
-					eh = new Event(EMove, e.mouseX, e.mouseY);
+					w.curMouseX = mx;
+					w.curMouseY = my;
+					eh = new Event(EMove, mx, my);
 				case 11: // MouseWheel
 					eh = new Event(EWheel, w.curMouseX, w.curMouseY);
-					eh.wheelDelta = -e.wheelDelta;
+					eh.wheelDelta = -wheel;
 				case 12: // KeyDown
 					eh = new Event(EKeyDown, w.curMouseX, w.curMouseY);
-					eh.keyCode = e.keyCode;
+					eh.keyCode = kc < 128 ? MAC_KEYMAP[kc] : kc;
 				case 13: // KeyUp
 					eh = new Event(EKeyUp, w.curMouseX, w.curMouseY);
-					eh.keyCode = e.keyCode;
+					eh.keyCode = kc < 128 ? MAC_KEYMAP[kc] : kc;
 				default:
 				}
 				if( eh != null ) w.event(eh);
@@ -425,7 +508,7 @@ class Window {
 			return true;
 		}
 
-	#elseif (hldx||hlsdl)
+		#elseif (hldx||hlsdl)
 
 	function get_vsync() : Bool return window.vsync;
 
