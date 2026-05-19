@@ -94,6 +94,8 @@ class MetalDriver extends h3d.impl.Driver {
 	// Depth/stencil state cache
 	var depthStencilStates : Map<Int, DepthStencilState>;
 	var currentDepthStencilState : DepthStencilState;
+	var currentPipeline : PipelineState;
+	var lastPass : h3d.mat.Pass;
 
 	// Sampler state cache
 	var samplerStates : Map<Int, SamplerState>;
@@ -223,6 +225,7 @@ class MetalDriver extends h3d.impl.Driver {
 			inRenderPass = false;
 		}
 		MtlDrv.present();
+		MtlDrv.drainAutoreleasePool();
 		if( metalWindow != null )
 			metal.Window.pollEvents(metalWindow);
 	}
@@ -234,6 +237,7 @@ class MetalDriver extends h3d.impl.Driver {
 			inRenderPass = false;
 		}
 		MtlDrv.present();
+		MtlDrv.drainAutoreleasePool();
 	}
 
 	override function getDriverName( details : Bool ) {
@@ -563,7 +567,7 @@ class MetalDriver extends h3d.impl.Driver {
 				}
 			}
 		MtlDrv.setRenderPipeline(pipeline);
-		pipelineDirty = false;
+		currentPipeline = pipeline;
 		return true;
 	}
 
@@ -577,7 +581,7 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function disposeBuffer( b : h3d.Buffer ) {
-		// Metal buffer disposal handled by GC for now
+		if( b.vbuf != null ) MtlDrv.releaseBuffer(b.vbuf);
 		b.vbuf = null;
 	}
 
@@ -663,7 +667,7 @@ class MetalDriver extends h3d.impl.Driver {
 		var tt = t.t;
 		if( tt == null ) return;
 		t.t = null;
-		// Metal textures are managed; native resources will be freed by GC
+		MtlDrv.releaseTexture(tt.res);
 	}
 
 	override function uploadTextureBitmap( t : h3d.mat.Texture, bmp : hxd.BitmapData, mipLevel : Int, side : Int ) {
@@ -695,6 +699,7 @@ class MetalDriver extends h3d.impl.Driver {
 		@:privateAccess {
 			var d = b.t;
 			b.t = null;
+			if( d != null && d.res != null ) MtlDrv.releaseTexture(d.res);
 		}
 	}
 
@@ -759,6 +764,7 @@ class MetalDriver extends h3d.impl.Driver {
 	static inline var SCISSOR_BIT = Pass.reserved_mask;
 
 	override function selectMaterial( pass : h3d.mat.Pass ) {
+		lastPass = pass;
 		var bits = @:privateAccess pass.bits;
 		var mask = pass.colorMask;
 		var st = pass.stencil;
@@ -862,6 +868,7 @@ class MetalDriver extends h3d.impl.Driver {
 				}
 			}
 			MtlDrv.setRenderPipeline(pipeline);
+			currentPipeline = pipeline;
 		}
 		pipelineDirty = false;
 	}
@@ -1061,6 +1068,7 @@ class MetalDriver extends h3d.impl.Driver {
 			}
 		}
 		MtlDrv.setRenderPipeline(pipeline);
+		currentPipeline = pipeline;
 	}
 
 	override function selectMultiBuffers( format : hxd.BufferFormat.MultiFormat, buffers : Array<h3d.Buffer> ) {
@@ -1074,6 +1082,9 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function draw( ibuf : h3d.Buffer, startIndex : Int, ntriangles : Int ) {
+		// Rebuild pipeline if shader changed after selectMaterial (Metal loses state between encoders)
+		if( pipelineDirty && lastPass != null )
+			selectMaterial(lastPass);
 		if( !allowDraw ) return;
 		if( ntriangles < 0 || ntriangles > 100000 ) return;
 		if( currentShader != null && currentShader.fragment.paramsSize == 15 )
@@ -1129,6 +1140,9 @@ class MetalDriver extends h3d.impl.Driver {
 		curVPH = -1;
 		curVPZN = -1;
 		curVPZF = -1;
+		// Re-apply pipeline on new render encoder — Metal loses all state between encoders
+		if( currentPipeline != null )
+			MtlDrv.setRenderPipeline(currentPipeline);
 	}
 
 	function setViewportCached(x:Float, y:Float, w:Float, h:Float, zn:Float, zf:Float) {
@@ -1225,9 +1239,18 @@ class MetalDriver extends h3d.impl.Driver {
 				}
 				isMRT = true;
 				curMRTTextures = nativeArr;
+				// Use WasCleared pattern: clear to black on first use, preserve on subsequent binds
+				var allCleared = true;
+				for( t in textures ) {
+					if( !t.flags.has(WasCleared) ) {
+						t.flags.set(WasCleared);
+						allCleared = false;
+					}
+				}
+				var colorLoad = allCleared ? LoadAction.Load : LoadAction.Clear;
 				MtlDrv.beginRenderPassMRT(
 					nativeArr, textures.length,
-					LoadAction.Clear, StoreAction.Store,
+					colorLoad, StoreAction.Store,
 					0, 0, 0, 0,
 					depthTex != null ? depthTex.res : null,
 					LoadAction.Clear, StoreAction.Store,
@@ -1238,8 +1261,11 @@ class MetalDriver extends h3d.impl.Driver {
 				isMRT = false;
 				curMRTTextures = null;
 				curColorFormats = [getPixelFormat(tex)];
+				// Use WasCleared pattern: clear to black on first use, preserve on subsequent binds
+				var colorLoad = tex.flags.has(WasCleared) ? LoadAction.Load : LoadAction.Clear;
+				if( !tex.flags.has(WasCleared) ) tex.flags.set(WasCleared);
 				MtlDrv.beginRenderPassEx(
-					tex.t.res, LoadAction.Clear, StoreAction.Store,
+					tex.t.res, colorLoad, StoreAction.Store,
 					0, 0, 0, 0,
 					depthTex != null ? depthTex.res : null,
 					LoadAction.Clear, StoreAction.Store,
@@ -1475,6 +1501,7 @@ class MetalDriver extends h3d.impl.Driver {
 	}
 
 	override function disposeInstanceBuffer( b : h3d.impl.InstanceBuffer ) {
+		if( b.data != null ) MtlDrv.releaseBuffer(b.data);
 		b.data = null;
 	}
 }
